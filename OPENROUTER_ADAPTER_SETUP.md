@@ -96,7 +96,35 @@ Após reiniciar o servidor:
 5. Configure conforme necessário
 6. Crie um issue e atribua ao agente
 
-## 📋 Modelos Disponíveis
+## �️ Ferramentas Disponíveis
+
+O adapter OpenRouter inclui **13 ferramentas** que os agentes podem usar:
+
+### Gerenciamento de Issues (9 tools)
+1. **get_issue** - Buscar detalhes de uma issue
+2. **update_issue_status** - Mudar status de uma issue
+3. **add_comment** - Postar comentário em uma issue
+4. **list_comments** - Listar comentários de uma issue
+5. **create_sub_issue** - Criar sub-issue
+6. **list_issues** - Listar issues da company
+7. **list_agents** - Listar agentes da company
+8. **hire_agent** - Contratar novo agente
+9. **request_approval** - Solicitar aprovação humana
+
+### Shell e Filesystem (4 tools)
+10. **execute_command** - Executar comandos shell (git, npm, dotnet, etc)
+11. **read_file** - Ler conteúdo de arquivos
+12. **write_file** - Criar/editar arquivos (cria diretórios automaticamente)
+13. **list_directory** - Listar arquivos e diretórios
+
+Com essas ferramentas, os agentes podem:
+- ✅ Criar e editar código
+- ✅ Executar builds e testes
+- ✅ Fazer commits git
+- ✅ Instalar pacotes (npm, dotnet, pip, etc)
+- ✅ Gerenciar issues e delegação de trabalho
+
+## �📋 Modelos Disponíveis
 
 ### Gratuitos (Free Tier)
 - `openrouter/auto` - Auto-routing (melhor modelo gratuito)

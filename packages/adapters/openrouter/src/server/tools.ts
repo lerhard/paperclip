@@ -390,6 +390,170 @@ function requestApprovalTool(ctx: BuildToolsContext): Tool {
   };
 }
 
+// ----- Shell and Filesystem Tools -----
+
+function executeCommandTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "execute_command",
+        description: "Execute a shell command and return its output. Use this for running build commands, git operations, package managers, etc.",
+        parameters: {
+          type: "object",
+          properties: {
+            command: { type: "string", description: "The shell command to execute" },
+            cwd: { type: "string", description: "Working directory (optional, defaults to project root)" },
+          },
+          required: ["command"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const command = asString(args.command);
+      const cwd = asString(args.cwd);
+      if (!command) return fail("command is required");
+
+      try {
+        const { execSync } = await import("node:child_process");
+        const result = execSync(command, {
+          cwd: cwd || process.cwd(),
+          encoding: "utf-8",
+          maxBuffer: 10 * 1024 * 1024, // 10MB
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        return ok(`Command executed successfully:\n${result}`);
+      } catch (err: any) {
+        const stderr = err.stderr?.toString() || "";
+        const stdout = err.stdout?.toString() || "";
+        return fail(`Command failed (exit code ${err.status}):\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`);
+      }
+    },
+  };
+}
+
+function readFileTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "read_file",
+        description: "Read the contents of a file. Returns the full file content as text.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Absolute or relative path to the file" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const filePath = asString(args.path);
+      if (!filePath) return fail("path is required");
+
+      try {
+        const fs = await import("node:fs/promises");
+        const content = await fs.readFile(filePath, "utf-8");
+        return ok(`File content (${filePath}):\n${content}`);
+      } catch (err: any) {
+        return fail(`Failed to read file: ${err.message}`);
+      }
+    },
+  };
+}
+
+function writeFileTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "write_file",
+        description: "Create or overwrite a file with the given content. Creates parent directories if needed.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Absolute or relative path to the file" },
+            content: { type: "string", description: "Content to write to the file" },
+          },
+          required: ["path", "content"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const filePath = asString(args.path);
+      const content = asString(args.content);
+      if (!filePath) return fail("path is required");
+      if (content === null) return fail("content is required");
+
+      try {
+        const fs = await import("node:fs/promises");
+        const path = await import("node:path");
+        
+        // Create parent directories if needed
+        const dir = path.dirname(filePath);
+        await fs.mkdir(dir, { recursive: true });
+        
+        // Write file
+        await fs.writeFile(filePath, content, "utf-8");
+        return ok(`File written successfully: ${filePath}`);
+      } catch (err: any) {
+        return fail(`Failed to write file: ${err.message}`);
+      }
+    },
+  };
+}
+
+function listDirectoryTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "list_directory",
+        description: "List files and directories in a given path. Returns names, types, and sizes.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Absolute or relative path to the directory" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const dirPath = asString(args.path);
+      if (!dirPath) return fail("path is required");
+
+      try {
+        const fs = await import("node:fs/promises");
+        const entries = await fs.readdir(dirPath, { withFileTypes: true });
+        
+        const items = await Promise.all(
+          entries.map(async (entry) => {
+            const fullPath = `${dirPath}/${entry.name}`;
+            let size = 0;
+            try {
+              const stats = await fs.stat(fullPath);
+              size = stats.size;
+            } catch {
+              // ignore stat errors
+            }
+            return {
+              name: entry.name,
+              type: entry.isDirectory() ? "directory" : "file",
+              size: entry.isFile() ? size : undefined,
+            };
+          })
+        );
+
+        return ok(JSON.stringify(items, null, 2));
+      } catch (err: any) {
+        return fail(`Failed to list directory: ${err.message}`);
+      }
+    },
+  };
+}
+
 // ----- public API -----
 
 export function buildTools(ctx: BuildToolsContext): Tool[] {
@@ -403,6 +567,11 @@ export function buildTools(ctx: BuildToolsContext): Tool[] {
     listAgentsTool(ctx),
     hireAgentTool(ctx),
     requestApprovalTool(ctx),
+    // Shell and filesystem tools
+    executeCommandTool(ctx),
+    readFileTool(ctx),
+    writeFileTool(ctx),
+    listDirectoryTool(ctx),
   ];
 }
 
