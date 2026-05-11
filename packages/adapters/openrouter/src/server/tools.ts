@@ -554,10 +554,414 @@ function listDirectoryTool(_ctx: BuildToolsContext): Tool {
   };
 }
 
+function grepSearchTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "grep_search",
+        description: "Search for a pattern in files using grep. Returns matching lines with file paths and line numbers. Essential for finding code before editing.",
+        parameters: {
+          type: "object",
+          properties: {
+            pattern: { type: "string", description: "Search pattern (supports regex)" },
+            path: { type: "string", description: "Directory or file to search in" },
+            file_pattern: { type: "string", description: "Optional file pattern to filter (e.g., '*.ts', '*.cs')" },
+            case_sensitive: { type: "boolean", description: "Case sensitive search (default: false)" },
+            max_results: { type: "number", description: "Maximum number of results (default: 100)" },
+          },
+          required: ["pattern", "path"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const pattern = asString(args.pattern);
+      const searchPath = asString(args.path);
+      if (!pattern) return fail("pattern is required");
+      if (!searchPath) return fail("path is required");
+
+      const filePattern = asString(args.file_pattern);
+      const caseSensitive = args.case_sensitive === true;
+      const maxResults = typeof args.max_results === "number" ? args.max_results : 100;
+
+      try {
+        const { execSync } = await import("node:child_process");
+        const fs = await import("node:fs");
+        
+        // Check if path exists
+        if (!fs.existsSync(searchPath)) {
+          return fail(`Path does not exist: ${searchPath}`);
+        }
+
+        // Build grep command
+        const grepArgs = [
+          "-n", // line numbers
+          caseSensitive ? "" : "-i", // case insensitive
+          "-r", // recursive
+          "--color=never",
+        ].filter(Boolean);
+
+        if (filePattern) {
+          grepArgs.push("--include", filePattern);
+        }
+
+        const command = process.platform === "win32"
+          ? `findstr /N ${caseSensitive ? "" : "/I"} /S "${pattern}" "${searchPath}\\*"`
+          : `grep ${grepArgs.join(" ")} "${pattern}" "${searchPath}"`;
+
+        let result: string;
+        try {
+          result = execSync(command, {
+            encoding: "utf-8",
+            maxBuffer: 10 * 1024 * 1024,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+        } catch (err: any) {
+          // grep returns exit code 1 when no matches found
+          if (err.status === 1) {
+            return ok("No matches found");
+          }
+          throw err;
+        }
+
+        // Parse and limit results
+        const lines = result.split("\n").filter(Boolean);
+        const limited = lines.slice(0, maxResults);
+        const truncated = lines.length > maxResults;
+
+        return ok(
+          limited.join("\n") +
+          (truncated ? `\n\n... (${lines.length - maxResults} more results truncated)` : "")
+        );
+      } catch (err: any) {
+        return fail(`Search failed: ${err.message}`);
+      }
+    },
+  };
+}
+
+function editFileTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "edit_file",
+        description: "Edit a file by replacing specific content. Safer than write_file for surgical changes. Finds old_content and replaces with new_content.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path to the file to edit" },
+            old_content: { type: "string", description: "Exact content to find and replace (must match exactly)" },
+            new_content: { type: "string", description: "New content to replace with" },
+          },
+          required: ["path", "old_content", "new_content"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const filePath = asString(args.path);
+      const oldContent = asString(args.old_content);
+      const newContent = asString(args.new_content);
+      
+      if (!filePath) return fail("path is required");
+      if (oldContent === null) return fail("old_content is required");
+      if (newContent === null) return fail("new_content is required");
+
+      try {
+        const fs = await import("node:fs/promises");
+        
+        // Read current content
+        const currentContent = await fs.readFile(filePath, "utf-8");
+        
+        // Check if old_content exists
+        if (!currentContent.includes(oldContent)) {
+          return fail(`old_content not found in file. Make sure it matches exactly (including whitespace).`);
+        }
+
+        // Check if old_content appears multiple times
+        const occurrences = currentContent.split(oldContent).length - 1;
+        if (occurrences > 1) {
+          return fail(`old_content appears ${occurrences} times in the file. Make it more specific to match only once.`);
+        }
+
+        // Replace content
+        const updatedContent = currentContent.replace(oldContent, newContent);
+        await fs.writeFile(filePath, updatedContent, "utf-8");
+
+        return ok(`File edited successfully: ${filePath}\nReplaced ${oldContent.length} characters with ${newContent.length} characters`);
+      } catch (err: any) {
+        return fail(`Failed to edit file: ${err.message}`);
+      }
+    },
+  };
+}
+
+function webFetchTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "web_fetch",
+        description: "Fetch content from a URL. Useful for reading documentation, API responses, or web pages. Returns the response body as text.",
+        parameters: {
+          type: "object",
+          properties: {
+            url: { type: "string", description: "URL to fetch (must start with http:// or https://)" },
+            method: { type: "string", description: "HTTP method (default: GET)", enum: ["GET", "POST", "PUT", "DELETE"] },
+            headers: { type: "object", description: "Optional HTTP headers" },
+            body: { type: "string", description: "Request body (for POST/PUT)" },
+          },
+          required: ["url"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const url = asString(args.url);
+      if (!url) return fail("url is required");
+      if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        return fail("url must start with http:// or https://");
+      }
+
+      const method = asString(args.method, "GET").toUpperCase();
+      const headers = typeof args.headers === "object" && args.headers !== null
+        ? args.headers as Record<string, string>
+        : {};
+      const body = asString(args.body);
+
+      try {
+        const response = await fetch(url, {
+          method,
+          headers: {
+            "User-Agent": "Paperclip-OpenRouter-Adapter/1.0",
+            ...headers,
+          },
+          body: body || undefined,
+        });
+
+        const contentType = response.headers.get("content-type") || "";
+        let content: string;
+
+        if (contentType.includes("application/json")) {
+          const json = await response.json();
+          content = JSON.stringify(json, null, 2);
+        } else {
+          content = await response.text();
+        }
+
+        // Limit response size
+        const maxSize = 50000; // 50KB
+        if (content.length > maxSize) {
+          content = content.slice(0, maxSize) + `\n\n... (truncated ${content.length - maxSize} characters)`;
+        }
+
+        return ok(`HTTP ${response.status} ${response.statusText}\n\n${content}`);
+      } catch (err: any) {
+        return fail(`Failed to fetch URL: ${err.message}`);
+      }
+    },
+  };
+}
+
+function globTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "glob",
+        description: "Find files matching a glob pattern. More powerful than list_directory for finding specific files. Examples: '**/*.ts', 'src/**/*.cs', '**/package.json'",
+        parameters: {
+          type: "object",
+          properties: {
+            pattern: { type: "string", description: "Glob pattern (e.g., '**/*.ts', 'src/**/*.cs')" },
+            cwd: { type: "string", description: "Working directory (default: current directory)" },
+            max_results: { type: "number", description: "Maximum number of results (default: 200)" },
+          },
+          required: ["pattern"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const pattern = asString(args.pattern);
+      if (!pattern) return fail("pattern is required");
+
+      const cwd = asString(args.cwd) || process.cwd();
+      const maxResults = typeof args.max_results === "number" ? args.max_results : 200;
+
+      try {
+        const { execSync } = await import("node:child_process");
+        
+        // Use find on Unix, dir on Windows
+        const command = process.platform === "win32"
+          ? `dir /S /B "${pattern}"`
+          : `find "${cwd}" -type f -path "${pattern}"`;
+
+        let result: string;
+        try {
+          result = execSync(command, {
+            cwd,
+            encoding: "utf-8",
+            maxBuffer: 10 * 1024 * 1024,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+        } catch (err: any) {
+          if (err.status === 1) {
+            return ok("No files found matching pattern");
+          }
+          throw err;
+        }
+
+        const files = result.split("\n").filter(Boolean);
+        const limited = files.slice(0, maxResults);
+        const truncated = files.length > maxResults;
+
+        return ok(
+          limited.join("\n") +
+          (truncated ? `\n\n... (${files.length - maxResults} more files truncated)` : "") +
+          `\n\nTotal: ${files.length} files`
+        );
+      } catch (err: any) {
+        return fail(`Glob search failed: ${err.message}`);
+      }
+    },
+  };
+}
+
+function gitDiffTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "git_diff",
+        description: "Show git diff of changes. Useful for reviewing what changed before committing.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Optional path to diff (default: all changes)" },
+            staged: { type: "boolean", description: "Show staged changes only (default: false)" },
+            cwd: { type: "string", description: "Repository directory (default: current directory)" },
+          },
+        },
+      },
+    },
+    execute: async (args) => {
+      const filePath = asString(args.path);
+      const staged = args.staged === true;
+      const cwd = asString(args.cwd) || process.cwd();
+
+      try {
+        const { execSync } = await import("node:child_process");
+        
+        const diffArgs = staged ? ["--cached"] : [];
+        if (filePath) diffArgs.push(filePath);
+
+        const result = execSync(`git diff ${diffArgs.join(" ")}`, {
+          cwd,
+          encoding: "utf-8",
+          maxBuffer: 10 * 1024 * 1024,
+        });
+
+        if (!result.trim()) {
+          return ok(staged ? "No staged changes" : "No changes");
+        }
+
+        // Limit diff size
+        const maxSize = 50000;
+        if (result.length > maxSize) {
+          return ok(result.slice(0, maxSize) + `\n\n... (diff truncated, ${result.length - maxSize} characters omitted)`);
+        }
+
+        return ok(result);
+      } catch (err: any) {
+        return fail(`Git diff failed: ${err.message}`);
+      }
+    },
+  };
+}
+
+function moveFileTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "move_file",
+        description: "Move or rename a file or directory.",
+        parameters: {
+          type: "object",
+          properties: {
+            source: { type: "string", description: "Source path" },
+            destination: { type: "string", description: "Destination path" },
+          },
+          required: ["source", "destination"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const source = asString(args.source);
+      const destination = asString(args.destination);
+      
+      if (!source) return fail("source is required");
+      if (!destination) return fail("destination is required");
+
+      try {
+        const fs = await import("node:fs/promises");
+        await fs.rename(source, destination);
+        return ok(`Moved: ${source} → ${destination}`);
+      } catch (err: any) {
+        return fail(`Failed to move file: ${err.message}`);
+      }
+    },
+  };
+}
+
+function deleteFileTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "delete_file",
+        description: "Delete a file or directory. Use with caution - this cannot be undone!",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path to delete" },
+            recursive: { type: "boolean", description: "Delete directory recursively (default: false)" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const filePath = asString(args.path);
+      const recursive = args.recursive === true;
+      
+      if (!filePath) return fail("path is required");
+
+      try {
+        const fs = await import("node:fs/promises");
+        const stats = await fs.stat(filePath);
+
+        if (stats.isDirectory()) {
+          if (!recursive) {
+            return fail("Path is a directory. Set recursive=true to delete it.");
+          }
+          await fs.rm(filePath, { recursive: true, force: true });
+          return ok(`Deleted directory: ${filePath}`);
+        } else {
+          await fs.unlink(filePath);
+          return ok(`Deleted file: ${filePath}`);
+        }
+      } catch (err: any) {
+        return fail(`Failed to delete: ${err.message}`);
+      }
+    },
+  };
+}
+
 // ----- public API -----
 
 export function buildTools(ctx: BuildToolsContext): Tool[] {
   return [
+    // Paperclip API tools (9)
     getIssueTool(ctx),
     updateIssueStatusTool(ctx),
     addCommentTool(ctx),
@@ -567,11 +971,21 @@ export function buildTools(ctx: BuildToolsContext): Tool[] {
     listAgentsTool(ctx),
     hireAgentTool(ctx),
     requestApprovalTool(ctx),
-    // Shell and filesystem tools
+    
+    // Basic filesystem tools (4)
     executeCommandTool(ctx),
     readFileTool(ctx),
     writeFileTool(ctx),
     listDirectoryTool(ctx),
+    
+    // Advanced tools (7)
+    grepSearchTool(ctx),      // Search in files
+    editFileTool(ctx),         // Surgical file edits
+    webFetchTool(ctx),         // Fetch URLs/docs
+    globTool(ctx),             // Find files by pattern
+    gitDiffTool(ctx),          // Show git changes
+    moveFileTool(ctx),         // Move/rename files
+    deleteFileTool(ctx),       // Delete files
   ];
 }
 

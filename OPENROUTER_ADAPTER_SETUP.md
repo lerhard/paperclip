@@ -96,9 +96,9 @@ Após reiniciar o servidor:
 5. Configure conforme necessário
 6. Crie um issue e atribua ao agente
 
-## �️ Ferramentas Disponíveis
+## 🛠️ Ferramentas Disponíveis
 
-O adapter OpenRouter inclui **13 ferramentas** que os agentes podem usar:
+O adapter OpenRouter inclui **20 ferramentas** que os agentes podem usar:
 
 ### Gerenciamento de Issues (9 tools)
 1. **get_issue** - Buscar detalhes de uma issue
@@ -111,18 +111,31 @@ O adapter OpenRouter inclui **13 ferramentas** que os agentes podem usar:
 8. **hire_agent** - Contratar novo agente
 9. **request_approval** - Solicitar aprovação humana
 
-### Shell e Filesystem (4 tools)
+### Filesystem Básico (4 tools)
 10. **execute_command** - Executar comandos shell (git, npm, dotnet, etc)
 11. **read_file** - Ler conteúdo de arquivos
 12. **write_file** - Criar/editar arquivos (cria diretórios automaticamente)
 13. **list_directory** - Listar arquivos e diretórios
 
+### Ferramentas Avançadas (7 tools)
+14. **grep_search** - Buscar padrões em arquivos (regex, filtros por tipo)
+15. **edit_file** - Editar arquivos cirurgicamente (replace específico, mais seguro)
+16. **web_fetch** - Buscar conteúdo de URLs (documentação, APIs, web pages)
+17. **glob** - Encontrar arquivos por padrão glob (`**/*.ts`, `src/**/*.cs`)
+18. **git_diff** - Ver mudanças git (staged ou unstaged)
+19. **move_file** - Mover/renomear arquivos e diretórios
+20. **delete_file** - Deletar arquivos e diretórios
+
 Com essas ferramentas, os agentes podem:
 - ✅ Criar e editar código
+- ✅ Buscar código antes de editar (grep, glob)
+- ✅ Fazer edições cirúrgicas seguras (edit_file)
 - ✅ Executar builds e testes
-- ✅ Fazer commits git
+- ✅ Fazer commits git e ver diffs
 - ✅ Instalar pacotes (npm, dotnet, pip, etc)
+- ✅ Ler documentação online
 - ✅ Gerenciar issues e delegação de trabalho
+- ✅ Organizar arquivos (mover, deletar)
 
 ## �📋 Modelos Disponíveis
 
