@@ -98,7 +98,7 @@ Após reiniciar o servidor:
 
 ## 🛠️ Ferramentas Disponíveis
 
-O adapter OpenRouter inclui **20 ferramentas** que os agentes podem usar:
+O adapter OpenRouter inclui **30 ferramentas profissionais** que os agentes podem usar:
 
 ### Gerenciamento de Issues (9 tools)
 1. **get_issue** - Buscar detalhes de uma issue
@@ -126,6 +126,16 @@ O adapter OpenRouter inclui **20 ferramentas** que os agentes podem usar:
 19. **move_file** - Mover/renomear arquivos e diretórios
 20. **delete_file** - Deletar arquivos e diretórios
 
+### Ferramentas Profissionais (10 tools)
+21. **tail_log** - Ler últimas N linhas de arquivo (logs, output)
+22. **kill_process** - Matar processo por PID (dev servers travados)
+23. **list_processes** - Listar processos rodando (com filtro)
+24. **get_env** - Ler variáveis de ambiente
+25. **test_port** - Testar se porta está aberta (verificar serviços)
+26. **find_todos** - Encontrar TODO/FIXME/HACK/XXX no código
+27. **count_lines** - Contar linhas de código (métricas)
+28. **diff_files** - Comparar dois arquivos lado a lado
+
 Com essas ferramentas, os agentes podem:
 - ✅ Criar e editar código
 - ✅ Buscar código antes de editar (grep, glob)
@@ -136,6 +146,11 @@ Com essas ferramentas, os agentes podem:
 - ✅ Ler documentação online
 - ✅ Gerenciar issues e delegação de trabalho
 - ✅ Organizar arquivos (mover, deletar)
+- ✅ Monitorar logs em tempo real (tail_log)
+- ✅ Gerenciar processos (kill, list)
+- ✅ Verificar configuração (env vars, portas)
+- ✅ Code review (find_todos, count_lines, diff)
+- ✅ Debugging avançado (processos, portas, logs)
 
 ## �📋 Modelos Disponíveis
 

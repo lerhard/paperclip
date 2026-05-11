@@ -957,6 +957,460 @@ function deleteFileTool(_ctx: BuildToolsContext): Tool {
   };
 }
 
+// ----- Monitoring Tools -----
+
+function tailLogTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "tail_log",
+        description: "Read the last N lines of a file. Useful for checking logs, build output, or recent file changes.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path to the file" },
+            lines: { type: "number", description: "Number of lines to read (default: 50)" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const filePath = asString(args.path);
+      if (!filePath) return fail("path is required");
+
+      const lines = typeof args.lines === "number" ? args.lines : 50;
+
+      try {
+        const fs = await import("node:fs/promises");
+        const content = await fs.readFile(filePath, "utf-8");
+        const allLines = content.split("\n");
+        const lastLines = allLines.slice(-lines);
+        
+        return ok(`Last ${lastLines.length} lines of ${filePath}:\n${lastLines.join("\n")}`);
+      } catch (err: any) {
+        return fail(`Failed to read file: ${err.message}`);
+      }
+    },
+  };
+}
+
+// ----- Process Tools -----
+
+function killProcessTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "kill_process",
+        description: "Kill a process by PID. Use with caution! Useful for stopping stuck dev servers or processes.",
+        parameters: {
+          type: "object",
+          properties: {
+            pid: { type: "number", description: "Process ID to kill" },
+            force: { type: "boolean", description: "Force kill (SIGKILL) instead of graceful (SIGTERM). Default: false" },
+          },
+          required: ["pid"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const pid = typeof args.pid === "number" ? args.pid : null;
+      if (pid === null) return fail("pid is required and must be a number");
+
+      const force = args.force === true;
+
+      try {
+        const signal = force ? "SIGKILL" : "SIGTERM";
+        process.kill(pid, signal);
+        return ok(`Process ${pid} killed with ${signal}`);
+      } catch (err: any) {
+        return fail(`Failed to kill process: ${err.message}`);
+      }
+    },
+  };
+}
+
+function listProcessesTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "list_processes",
+        description: "List running processes. Useful for finding PIDs of dev servers, databases, or other services.",
+        parameters: {
+          type: "object",
+          properties: {
+            filter: { type: "string", description: "Optional filter by process name (e.g., 'node', 'dotnet', 'postgres')" },
+          },
+        },
+      },
+    },
+    execute: async (args) => {
+      const filter = asString(args.filter);
+
+      try {
+        const { execSync } = await import("node:child_process");
+        
+        const command = process.platform === "win32"
+          ? "tasklist"
+          : "ps aux";
+
+        let result = execSync(command, {
+          encoding: "utf-8",
+          maxBuffer: 10 * 1024 * 1024,
+        });
+
+        // Filter if requested
+        if (filter) {
+          const lines = result.split("\n");
+          const filtered = lines.filter(line => 
+            line.toLowerCase().includes(filter.toLowerCase())
+          );
+          result = filtered.join("\n");
+        }
+
+        // Limit output
+        const maxSize = 10000;
+        if (result.length > maxSize) {
+          result = result.slice(0, maxSize) + `\n\n... (truncated ${result.length - maxSize} characters)`;
+        }
+
+        return ok(result || "No processes found");
+      } catch (err: any) {
+        return fail(`Failed to list processes: ${err.message}`);
+      }
+    },
+  };
+}
+
+// ----- Environment Tools -----
+
+function getEnvTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "get_env",
+        description: "Get environment variable value. Useful for checking configuration, API keys, paths, etc.",
+        parameters: {
+          type: "object",
+          properties: {
+            key: { type: "string", description: "Environment variable name (e.g., 'PATH', 'NODE_ENV')" },
+          },
+          required: ["key"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const key = asString(args.key);
+      if (!key) return fail("key is required");
+
+      const value = process.env[key];
+      if (value === undefined) {
+        return ok(`Environment variable '${key}' is not set`);
+      }
+
+      return ok(`${key}=${value}`);
+    },
+  };
+}
+
+// ----- Network Tools -----
+
+function testPortTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "test_port",
+        description: "Test if a port is open/listening. Useful for checking if a server is running.",
+        parameters: {
+          type: "object",
+          properties: {
+            host: { type: "string", description: "Host to test (default: localhost)" },
+            port: { type: "number", description: "Port number to test" },
+            timeout: { type: "number", description: "Timeout in milliseconds (default: 3000)" },
+          },
+          required: ["port"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const port = typeof args.port === "number" ? args.port : null;
+      if (port === null) return fail("port is required and must be a number");
+
+      const host = asString(args.host, "localhost");
+      const timeout = typeof args.timeout === "number" ? args.timeout : 3000;
+
+      try {
+        const net = await import("node:net");
+        
+        return await new Promise<ToolExecutionResult>((resolve) => {
+          const socket = new net.Socket();
+          let resolved = false;
+
+          const cleanup = () => {
+            if (!resolved) {
+              resolved = true;
+              socket.destroy();
+            }
+          };
+
+          socket.setTimeout(timeout);
+          
+          socket.on("connect", () => {
+            cleanup();
+            resolve(ok(`Port ${port} on ${host} is OPEN`));
+          });
+
+          socket.on("timeout", () => {
+            cleanup();
+            resolve(ok(`Port ${port} on ${host} is CLOSED (timeout)`));
+          });
+
+          socket.on("error", (err: any) => {
+            cleanup();
+            if (err.code === "ECONNREFUSED") {
+              resolve(ok(`Port ${port} on ${host} is CLOSED (connection refused)`));
+            } else {
+              resolve(fail(`Error testing port: ${err.message}`));
+            }
+          });
+
+          socket.connect(port, host);
+        });
+      } catch (err: any) {
+        return fail(`Failed to test port: ${err.message}`);
+      }
+    },
+  };
+}
+
+// ----- Code Analysis Tools -----
+
+function findTodosTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "find_todos",
+        description: "Find TODO, FIXME, HACK, XXX comments in code. Useful for code review and finding work items.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Directory or file to search" },
+            file_pattern: { type: "string", description: "File pattern (e.g., '*.ts', '*.cs')" },
+            max_results: { type: "number", description: "Maximum results (default: 100)" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const searchPath = asString(args.path);
+      if (!searchPath) return fail("path is required");
+
+      const filePattern = asString(args.file_pattern);
+      const maxResults = typeof args.max_results === "number" ? args.max_results : 100;
+
+      try {
+        const { execSync } = await import("node:child_process");
+        
+        // Search for TODO, FIXME, HACK, XXX, NOTE
+        const pattern = "TODO|FIXME|HACK|XXX|NOTE";
+        
+        const grepArgs = ["-n", "-i", "-r", "--color=never", "-E"];
+        if (filePattern) {
+          grepArgs.push("--include", filePattern);
+        }
+
+        const command = process.platform === "win32"
+          ? `findstr /N /I /S /R "TODO FIXME HACK XXX NOTE" "${searchPath}\\*"`
+          : `grep ${grepArgs.join(" ")} "${pattern}" "${searchPath}"`;
+
+        let result: string;
+        try {
+          result = execSync(command, {
+            encoding: "utf-8",
+            maxBuffer: 10 * 1024 * 1024,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+        } catch (err: any) {
+          if (err.status === 1) {
+            return ok("No TODOs/FIXMEs found");
+          }
+          throw err;
+        }
+
+        const lines = result.split("\n").filter(Boolean);
+        const limited = lines.slice(0, maxResults);
+        const truncated = lines.length > maxResults;
+
+        return ok(
+          `Found ${lines.length} TODO/FIXME comments:\n\n` +
+          limited.join("\n") +
+          (truncated ? `\n\n... (${lines.length - maxResults} more results truncated)` : "")
+        );
+      } catch (err: any) {
+        return fail(`Search failed: ${err.message}`);
+      }
+    },
+  };
+}
+
+function countLinesTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "count_lines",
+        description: "Count lines of code in files. Useful for code metrics and understanding project size.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "File or directory to count" },
+            file_pattern: { type: "string", description: "File pattern (e.g., '*.ts', '*.cs')" },
+            exclude_blank: { type: "boolean", description: "Exclude blank lines (default: false)" },
+          },
+          required: ["path"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const searchPath = asString(args.path);
+      if (!searchPath) return fail("path is required");
+
+      const filePattern = asString(args.file_pattern);
+      const excludeBlank = args.exclude_blank === true;
+
+      try {
+        const fs = await import("node:fs/promises");
+        const path = await import("node:path");
+        
+        const stats = await fs.stat(searchPath);
+        let totalLines = 0;
+        let totalFiles = 0;
+
+        const countFile = async (filePath: string): Promise<number> => {
+          const content = await fs.readFile(filePath, "utf-8");
+          const lines = content.split("\n");
+          if (excludeBlank) {
+            return lines.filter(line => line.trim().length > 0).length;
+          }
+          return lines.length;
+        };
+
+        const processDirectory = async (dir: string) => {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            
+            if (entry.isDirectory()) {
+              await processDirectory(fullPath);
+            } else if (entry.isFile()) {
+              if (!filePattern || entry.name.match(new RegExp(filePattern.replace("*", ".*")))) {
+                totalLines += await countFile(fullPath);
+                totalFiles++;
+              }
+            }
+          }
+        };
+
+        if (stats.isDirectory()) {
+          await processDirectory(searchPath);
+        } else {
+          totalLines = await countFile(searchPath);
+          totalFiles = 1;
+        }
+
+        return ok(
+          `Lines of code: ${totalLines}\n` +
+          `Files: ${totalFiles}\n` +
+          `Average: ${totalFiles > 0 ? Math.round(totalLines / totalFiles) : 0} lines/file` +
+          (excludeBlank ? " (blank lines excluded)" : "")
+        );
+      } catch (err: any) {
+        return fail(`Failed to count lines: ${err.message}`);
+      }
+    },
+  };
+}
+
+// ----- Diff Tools -----
+
+function diffFilesTool(_ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "diff_files",
+        description: "Compare two files and show differences. Useful for reviewing changes or comparing versions.",
+        parameters: {
+          type: "object",
+          properties: {
+            file1: { type: "string", description: "First file path" },
+            file2: { type: "string", description: "Second file path" },
+            unified: { type: "number", description: "Lines of context (default: 3)" },
+          },
+          required: ["file1", "file2"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const file1 = asString(args.file1);
+      const file2 = asString(args.file2);
+      
+      if (!file1) return fail("file1 is required");
+      if (!file2) return fail("file2 is required");
+
+      const unified = typeof args.unified === "number" ? args.unified : 3;
+
+      try {
+        const { execSync } = await import("node:child_process");
+        
+        const command = process.platform === "win32"
+          ? `fc "${file1}" "${file2}"`
+          : `diff -u${unified} "${file1}" "${file2}"`;
+
+        let result: string;
+        try {
+          result = execSync(command, {
+            encoding: "utf-8",
+            maxBuffer: 10 * 1024 * 1024,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+        } catch (err: any) {
+          // diff returns exit code 1 when files differ
+          if (err.status === 1 && err.stdout) {
+            result = err.stdout;
+          } else if (err.status === 0) {
+            return ok("Files are identical");
+          } else {
+            throw err;
+          }
+        }
+
+        if (!result || result.trim() === "") {
+          return ok("Files are identical");
+        }
+
+        // Limit diff size
+        const maxSize = 50000;
+        if (result.length > maxSize) {
+          result = result.slice(0, maxSize) + `\n\n... (diff truncated, ${result.length - maxSize} characters omitted)`;
+        }
+
+        return ok(result);
+      } catch (err: any) {
+        return fail(`Diff failed: ${err.message}`);
+      }
+    },
+  };
+}
+
 // ----- public API -----
 
 export function buildTools(ctx: BuildToolsContext): Tool[] {
@@ -986,6 +1440,16 @@ export function buildTools(ctx: BuildToolsContext): Tool[] {
     gitDiffTool(ctx),          // Show git changes
     moveFileTool(ctx),         // Move/rename files
     deleteFileTool(ctx),       // Delete files
+    
+    // Professional tools (10)
+    tailLogTool(ctx),          // Read last N lines of file
+    killProcessTool(ctx),      // Kill process by PID
+    listProcessesTool(ctx),    // List running processes
+    getEnvTool(ctx),           // Get environment variable
+    testPortTool(ctx),         // Test if port is open
+    findTodosTool(ctx),        // Find TODO/FIXME comments
+    countLinesTool(ctx),       // Count lines of code
+    diffFilesTool(ctx),        // Compare two files
   ];
 }
 
