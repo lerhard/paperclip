@@ -155,7 +155,7 @@ async function callOpenRouter(
   messages: ChatMessage[],
   tools: Tool[],
   onLog?: OnLog,
-): Promise<ChatCompletionResponse> {
+): Promise<{ response: ChatCompletionResponse; usedKey: string }> {
   const body: Record<string, unknown> = {
     model: config.model || "openrouter/auto",
     messages,
@@ -212,7 +212,8 @@ async function callOpenRouter(
           );
         }
         
-        return (await fallbackResponse.json()) as ChatCompletionResponse;
+        const json = (await fallbackResponse.json()) as ChatCompletionResponse;
+        return { response: json, usedKey: fallbackKey };
       }
     }
     
@@ -220,7 +221,7 @@ async function callOpenRouter(
   }
 
   const json = (await response.json()) as ChatCompletionResponse;
-  return json;
+  return { response: json, usedKey: apiKey };
 }
 
 async function fetchGenerationCost(
@@ -439,7 +440,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       let response: ChatCompletionResponse;
       try {
-        response = await callOpenRouter(apiKey, config, messages, tools, onLog);
+        const result = await callOpenRouter(apiKey, config, messages, tools, onLog);
+        response = result.response;
+        // Update apiKey if fallback was used
+        if (result.usedKey !== apiKey) {
+          apiKey = result.usedKey;
+        }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         runError = { message: reason, code: "openrouter_request_failed" };
