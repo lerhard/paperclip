@@ -12,6 +12,7 @@ import {
   detectModel,
   listSkills,
   syncSkills,
+  listOpenRouterModels,
 } from "./server/index.js";
 import {
   type,
@@ -32,7 +33,8 @@ export function createServerAdapter() {
     detectModel,
     listSkills,
     syncSkills,
-    models,
+    models, // Static fallback when API is unreachable
+    listModels: listOpenRouterModels, // Dynamic model list from OpenRouter API
     supportsLocalAgentJwt: true,
     supportsInstructionsBundle: true,
     instructionsPathKey: "instructionsFilePath",
