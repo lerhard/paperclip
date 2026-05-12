@@ -93,7 +93,14 @@ const DEFAULT_SYSTEM_PROMPT =
   "Use the tools available to you to read context, post comments, update status, and delegate work. " +
   "When finished, call update_issue_status with status='done' and post a summary comment.";
 
-function resolveApiKey(config: OpenRouterConfig): string {
+function resolveApiKey(config: OpenRouterConfig, useFallback = false): string {
+  if (useFallback) {
+    const fallbackKey = process.env.OPENROUTER_API_KEY_FALLBACK || "";
+    if (fallbackKey) {
+      return fallbackKey;
+    }
+  }
+  
   const key = config.apiKey || process.env.OPENROUTER_API_KEY || "";
   if (!key) {
     throw new Error(
@@ -147,6 +154,7 @@ async function callOpenRouter(
   config: OpenRouterConfig,
   messages: ChatMessage[],
   tools: Tool[],
+  onLog?: OnLog,
 ): Promise<ChatCompletionResponse> {
   const body: Record<string, unknown> = {
     model: config.model || "openrouter/auto",
@@ -172,6 +180,42 @@ async function callOpenRouter(
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
+    
+    // Check if it's a daily rate limit error
+    if (response.status === 429 && errText.includes("free-models-per-day")) {
+      // Try fallback key if available
+      const fallbackKey = process.env.OPENROUTER_API_KEY_FALLBACK;
+      if (fallbackKey && fallbackKey !== apiKey) {
+        if (onLog) {
+          await writeRawStderr(
+            onLog,
+            "[openrouter] Daily rate limit hit on primary key. Switching to fallback key..."
+          );
+        }
+        
+        // Retry with fallback key
+        const fallbackResponse = await fetch(OPENROUTER_CHAT_ENDPOINT, {
+          method: "POST",
+          headers: buildHeaders(fallbackKey, config),
+          body: JSON.stringify(body),
+        });
+        
+        if (!fallbackResponse.ok) {
+          const fallbackErrText = await fallbackResponse.text().catch(() => "");
+          throw new Error(`OpenRouter API error with fallback key (${fallbackResponse.status}): ${fallbackErrText}`);
+        }
+        
+        if (onLog) {
+          await writeRawStderr(
+            onLog,
+            "[openrouter] ✅ Successfully switched to fallback key!"
+          );
+        }
+        
+        return (await fallbackResponse.json()) as ChatCompletionResponse;
+      }
+    }
+    
     throw new Error(`OpenRouter API error (${response.status}): ${errText}`);
   }
 
@@ -395,7 +439,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       let response: ChatCompletionResponse;
       try {
-        response = await callOpenRouter(apiKey, config, messages, tools);
+        response = await callOpenRouter(apiKey, config, messages, tools, onLog);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         runError = { message: reason, code: "openrouter_request_failed" };

@@ -81,8 +81,30 @@ Você precisará de uma API key do OpenRouter:
 ```powershell
 # No arquivo .env ou .paperclip/.env
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
+OPENROUTER_API_KEY_FALLBACK=sk-or-v1-xxxxx  # Opcional: fallback automático
 PAPERCLIP_AGENT_JWT_SECRET=<gerar-com-openssl-rand-hex-32>
 PAPERCLIP_API_URL=http://localhost:3100
+```
+
+#### 🔄 Fallback Automático de API Key
+
+O adapter detecta automaticamente quando você atinge o **rate limit diário** do OpenRouter e **troca automaticamente** para a chave fallback:
+
+- **Rate Limit Detectado**: `free-models-per-day` (429 error)
+- **Ação**: Tenta novamente com `OPENROUTER_API_KEY_FALLBACK`
+- **Log**: Mostra no transcript quando faz o switch
+- **Benefício**: Zero downtime, agente continua trabalhando
+
+**Exemplo de erro que ativa fallback:**
+```
+Rate limit exceeded: free-models-per-day-high-balance
+X-RateLimit-Remaining: 0
+```
+
+**Você verá no log:**
+```
+[openrouter] Daily rate limit hit on primary key. Switching to fallback key...
+[openrouter] ✅ Successfully switched to fallback key!
 ```
 
 ### 4. Usar o Adapter
