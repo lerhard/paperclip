@@ -80,20 +80,23 @@ Você precisará de uma API key do OpenRouter:
 
 ```powershell
 # No arquivo .env ou .paperclip/.env
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
-OPENROUTER_API_KEY_FALLBACK=sk-or-v1-xxxxx  # Opcional: fallback automático
-PAPERCLIP_AGENT_JWT_SECRET=<gerar-com-openssl-rand-hex-32>
-PAPERCLIP_API_URL=http://localhost:3100
+OPENROUTER_API_KEY=sk-or-v1-xxxxx           # Chave primária
+OPENROUTER_API_KEY_2=sk-or-v1-yyyyy         # Opcional: fallback 1
+OPENROUTER_API_KEY_3=sk-or-v1-zzzzz         # Opcional: fallback 2
+# ... até OPENROUTER_API_KEY_10
+PAPERCLIP_AGENT_JWT_SECRET=seu-jwt-secret-aqui
 ```
 
-#### 🔄 Fallback Automático de API Key
+#### 🔄 Sistema de Fallback em Cascata
 
-O adapter detecta automaticamente quando você atinge o **rate limit diário** do OpenRouter e **troca automaticamente** para a chave fallback:
+O adapter detecta automaticamente quando você atinge o **rate limit diário** e **tenta múltiplas chaves em sequência**:
 
 - **Rate Limit Detectado**: `free-models-per-day` (429 error)
-- **Ação**: Tenta novamente com `OPENROUTER_API_KEY_FALLBACK`
-- **Log**: Mostra no transcript quando faz o switch
-- **Benefício**: Zero downtime, agente continua trabalhando
+- **Ação**: Tenta `OPENROUTER_API_KEY_2`, depois `_3`, `_4`... até `_10`
+- **Inteligente**: Pula chaves duplicadas ou já testadas
+- **Persistente**: Continua na chave que funcionou pelo resto do run
+- **Log**: Mostra cada tentativa no transcript
+- **Benefício**: Zero downtime, até 10x mais quota diária!
 
 **Exemplo de erro que ativa fallback:**
 ```
@@ -103,9 +106,17 @@ X-RateLimit-Remaining: 0
 
 **Você verá no log:**
 ```
-[openrouter] Daily rate limit hit on primary key. Switching to fallback key...
-[openrouter] ✅ Successfully switched to fallback key!
+[openrouter] Daily rate limit hit. Trying API key #2...
+[openrouter] API key #2 also rate limited, trying next...
+[openrouter] Daily rate limit hit. Trying API key #3...
+[openrouter] ✅ Successfully switched to API key #3!
 ```
+
+**Quota total com múltiplas chaves:**
+- 1 chave: 2.000 requests/dia
+- 2 chaves: 4.000 requests/dia
+- 3 chaves: 6.000 requests/dia
+- 10 chaves: 20.000 requests/dia! 🚀
 
 ### 4. Usar o Adapter
 

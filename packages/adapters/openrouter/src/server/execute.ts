@@ -183,38 +183,66 @@ async function callOpenRouter(
     
     // Check if it's a daily rate limit error
     if (response.status === 429 && errText.includes("free-models-per-day")) {
-      // Try fallback key if available
-      const fallbackKey = process.env.OPENROUTER_API_KEY_FALLBACK;
-      if (fallbackKey && fallbackKey !== apiKey) {
+      // Try fallback keys in sequence: OPENROUTER_API_KEY_2, _3, _4, etc.
+      const maxFallbacks = 10; // Support up to 10 API keys total
+      const usedKeys = new Set([apiKey]); // Track already tried keys
+      
+      for (let i = 2; i <= maxFallbacks; i++) {
+        const fallbackKey = process.env[`OPENROUTER_API_KEY_${i}`];
+        
+        // Skip if key doesn't exist or was already tried
+        if (!fallbackKey || usedKeys.has(fallbackKey)) {
+          continue;
+        }
+        
+        usedKeys.add(fallbackKey);
+        
         if (onLog) {
           await writeRawStderr(
             onLog,
-            "[openrouter] Daily rate limit hit on primary key. Switching to fallback key..."
+            `[openrouter] Daily rate limit hit. Trying API key #${i}...`
           );
         }
         
-        // Retry with fallback key
+        // Retry with this fallback key
         const fallbackResponse = await fetch(OPENROUTER_CHAT_ENDPOINT, {
           method: "POST",
           headers: buildHeaders(fallbackKey, config),
           body: JSON.stringify(body),
         });
         
-        if (!fallbackResponse.ok) {
-          const fallbackErrText = await fallbackResponse.text().catch(() => "");
-          throw new Error(`OpenRouter API error with fallback key (${fallbackResponse.status}): ${fallbackErrText}`);
+        if (fallbackResponse.ok) {
+          // Success! Use this key
+          if (onLog) {
+            await writeRawStderr(
+              onLog,
+              `[openrouter] ✅ Successfully switched to API key #${i}!`
+            );
+          }
+          
+          const json = (await fallbackResponse.json()) as ChatCompletionResponse;
+          return { response: json, usedKey: fallbackKey };
         }
         
-        if (onLog) {
-          await writeRawStderr(
-            onLog,
-            "[openrouter] ✅ Successfully switched to fallback key!"
-          );
+        // This fallback also failed, check if it's also rate limited
+        const fallbackErrText = await fallbackResponse.text().catch(() => "");
+        if (fallbackResponse.status === 429 && fallbackErrText.includes("free-models-per-day")) {
+          // This key is also rate limited, try next one
+          if (onLog) {
+            await writeRawStderr(
+              onLog,
+              `[openrouter] API key #${i} also rate limited, trying next...`
+            );
+          }
+          continue;
         }
         
-        const json = (await fallbackResponse.json()) as ChatCompletionResponse;
-        return { response: json, usedKey: fallbackKey };
+        // Different error, throw it
+        throw new Error(`OpenRouter API error with key #${i} (${fallbackResponse.status}): ${fallbackErrText}`);
       }
+      
+      // All fallback keys exhausted or rate limited
+      throw new Error(`OpenRouter API error (${response.status}): All API keys exhausted or rate limited. ${errText}`);
     }
     
     throw new Error(`OpenRouter API error (${response.status}): ${errText}`);
