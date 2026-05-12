@@ -148,6 +148,7 @@ export async function testEnvironment(
 
 /**
  * Fetch all models from OpenRouter — used by listModels() for dynamic model picker.
+ * Shows free models first with [FREE] badge, then paid models with pricing info.
  */
 export async function listOpenRouterModels(): Promise<{ id: string; label: string }[]> {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -161,17 +162,45 @@ export async function listOpenRouterModels(): Promise<{ id: string; label: strin
     if (!res.ok) return [];
 
     const data = (await res.json()) as { data: OpenRouterModel[] };
+    
     return (data.data || [])
+      .map((m) => {
+        const isFree = m.id.endsWith(":free") || 
+                      (m.pricing?.prompt === "0" && m.pricing?.completion === "0");
+        
+        let label = m.name || m.id;
+        
+        if (isFree) {
+          // Add [FREE] badge to free models
+          label = `[FREE] ${label}`;
+        } else if (m.pricing?.prompt && m.pricing?.completion) {
+          // Add pricing info to paid models
+          const promptCost = parseFloat(m.pricing.prompt) * 1_000_000;
+          const completionCost = parseFloat(m.pricing.completion) * 1_000_000;
+          
+          if (promptCost > 0 || completionCost > 0) {
+            label = `${label} ($${promptCost.toFixed(2)}/$${completionCost.toFixed(2)}/1M)`;
+          }
+        }
+        
+        return {
+          id: m.id,
+          label,
+          isFree,
+          name: m.name || m.id,
+        };
+      })
       .sort((a, b) => {
-        const aFree = a.id.endsWith(":free") || (a.pricing?.prompt === "0" && a.pricing?.completion === "0");
-        const bFree = b.id.endsWith(":free") || (b.pricing?.prompt === "0" && b.pricing?.completion === "0");
-        if (aFree && !bFree) return -1;
-        if (!aFree && bFree) return 1;
-        return (a.name || a.id).localeCompare(b.name || b.id);
+        // Free models first
+        if (a.isFree && !b.isFree) return -1;
+        if (!a.isFree && b.isFree) return 1;
+        
+        // Then alphabetically by name
+        return a.name.localeCompare(b.name);
       })
       .map((m) => ({
         id: m.id,
-        label: m.name || m.id,
+        label: m.label,
       }));
   } catch {
     return [];
