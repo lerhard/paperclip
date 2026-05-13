@@ -864,6 +864,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     errors: runError ? [runError.message] : [],
   });
 
+  // Build sessionParams with rate limit data for Costs -> Providers dashboard
+  const sessionParams: Record<string, unknown> = {};
+  if (lastGenerationId) sessionParams.lastGenerationId = lastGenerationId;
+  if (keyUsage.size > 0) {
+    const rateLimits: Record<string, unknown> = {};
+    for (const [masked, data] of keyUsage.entries()) {
+      const rl = data.rateLimit;
+      rateLimits[masked] = {
+        requests: data.requests,
+        remaining: rl.remaining,
+        limit: rl.limit,
+        resetInSec: Math.max(0, Math.ceil((rl.resetTs - Date.now()) / 1000)),
+      };
+    }
+    sessionParams.openrouterRateLimits = rateLimits;
+  }
+
   if (stoppedReason === "error" && runError) {
     return {
       exitCode: 1,
@@ -879,7 +896,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       costUsd,
       sessionId: lastGenerationId ?? null,
       sessionDisplayId: lastGenerationId ?? null,
-      sessionParams: lastGenerationId ? { lastGenerationId } : null,
+      sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,
     };
   }
 
@@ -895,7 +912,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     costUsd,
     sessionId: lastGenerationId ?? null,
     sessionDisplayId: lastGenerationId ?? null,
-    sessionParams: lastGenerationId ? { lastGenerationId } : null,
+    sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,
     summary: finalAssistantText.slice(0, 500),
   };
 }
