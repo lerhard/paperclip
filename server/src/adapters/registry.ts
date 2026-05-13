@@ -114,6 +114,17 @@ import {
   modelProfiles as piModelProfiles,
 } from "@paperclipai/adapter-pi-local";
 import {
+  execute as openrouterExecute,
+  testEnvironment as openrouterTestEnvironment,
+  sessionCodec as openrouterSessionCodec,
+  listOpenRouterModels,
+} from "@paperclipai/adapter-openrouter/server";
+import {
+  agentConfigurationDoc as openrouterAgentConfigurationDoc,
+  models as openrouterModels,
+  type as openrouterType,
+} from "@paperclipai/adapter-openrouter";
+import {
   execute as hermesExecute,
   testEnvironment as hermesTestEnvironment,
   sessionCodec as hermesSessionCodec,
@@ -399,6 +410,21 @@ const piLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: piAgentConfigurationDoc,
 };
 
+const openrouterAdapter: ServerAdapterModule = {
+  type: openrouterType,
+  execute: openrouterExecute,
+  testEnvironment: openrouterTestEnvironment,
+  sessionCodec: openrouterSessionCodec,
+  sessionManagement: getAdapterSessionManagement("openrouter") ?? undefined,
+  models: openrouterModels,
+  listModels: listOpenRouterModels,
+  supportsLocalAgentJwt: false,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: openrouterAgentConfigurationDoc,
+};
+
 // hermes-paperclip-adapter v0.2.0 predates the authToken field; cast is
 // intentional until hermes ships a matching AdapterExecutionContext type.
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
@@ -482,6 +508,7 @@ function registerBuiltInAdapters() {
     claudeLocalAdapter,
     codexLocalAdapter,
     openCodeLocalAdapter,
+    openrouterAdapter,
     piLocalAdapter,
     cursorCloudAdapter,
     cursorLocalAdapter,
