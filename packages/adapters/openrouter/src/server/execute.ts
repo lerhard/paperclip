@@ -282,12 +282,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const config = (ctx.agent.adapterConfig ?? ctx.config) as unknown as OpenRouterConfig & {
     maxTurns?: number;
     autoApprove?: boolean;
+    maxContextMessages?: number;
   };
   const { context, onLog, agent, authToken } = ctx;
 
   const model = config.model || "openrouter/auto";
   const maxTurns = typeof config.maxTurns === "number" && config.maxTurns > 0 ? config.maxTurns : DEFAULT_MAX_TURNS;
   const autoApprove = config.autoApprove === true;
+  const maxContextMessages = typeof config.maxContextMessages === "number" && config.maxContextMessages > 0 
+    ? config.maxContextMessages 
+    : undefined;
 
   // Tool handlers need a Paperclip API client. If we have no authToken,
   // tools are disabled (model can still respond, just can't act).
@@ -466,9 +470,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     while (turn < maxTurns) {
       turn += 1;
 
+      // Truncate message history if maxContextMessages is set (token optimization)
+      let messagesToSend = messages;
+      if (maxContextMessages && messages.length > maxContextMessages + 1) {
+        // Always keep system message (index 0) + last N messages
+        const systemMsg = messages[0];
+        const recentMessages = messages.slice(-(maxContextMessages));
+        messagesToSend = [systemMsg, ...recentMessages];
+        
+        if (turn === 1) {
+          await writeRawStderr(
+            onLog,
+            `[openrouter] Token optimization: keeping system + last ${maxContextMessages} messages (${messagesToSend.length}/${messages.length} total)`
+          );
+        }
+      }
+
       let response: ChatCompletionResponse;
       try {
-        const result = await callOpenRouter(apiKey, config, messages, tools, onLog);
+        const result = await callOpenRouter(apiKey, config, messagesToSend, tools, onLog);
         response = result.response;
         // Update apiKey if fallback was used
         if (result.usedKey !== apiKey) {

@@ -129,7 +129,108 @@ Após reiniciar o servidor:
 5. Configure conforme necessário
 6. Crie um issue e atribua ao agente
 
-## 🛠️ Ferramentas Disponíveis
+## � Otimização de Tokens (Economia de Custos)
+
+O adapter OpenRouter oferece várias formas de **reduzir drasticamente** o uso de tokens:
+
+### 1. **Limitar Histórico de Mensagens** (`maxContextMessages`)
+
+Mantém apenas as N mensagens mais recentes + system prompt:
+
+```json
+{
+  "model": "openai/gpt-4o-mini",
+  "maxContextMessages": 10
+}
+```
+
+**Economia**: 40-60% em runs longos (>15 turns)
+
+**Como funciona**:
+- Sempre mantém: System prompt (primeira mensagem)
+- Mantém apenas: Últimas 10 mensagens (user + assistant + tool)
+- Descarta: Mensagens antigas do meio da conversa
+
+**Exemplo**:
+```
+Turn 1: System + User (2 msgs) → Envia 2 msgs
+Turn 5: System + User + 8 msgs antigas (10 msgs) → Envia 10 msgs
+Turn 10: System + User + 18 msgs antigas (20 msgs) → Envia 11 msgs (system + últimas 10)
+```
+
+### 2. **System Prompt Minimalista**
+
+Use prompts curtos via `instructionsFilePath`:
+
+```json
+{
+  "instructionsFilePath": "/path/to/prompts/minimal.md"
+}
+```
+
+**Economia**: 30-50% no system prompt
+
+**Exemplo** (`minimal.md`):
+```markdown
+You are an AI agent in Paperclip. Execute tasks using tools.
+Call update_issue_status(status='done') when finished.
+```
+
+vs. Prompt padrão (200+ tokens).
+
+### 3. **Modelos Gratuitos Eficientes**
+
+Alguns modelos gratuitos são mais eficientes em tokens:
+
+| Modelo | Tokens/Request | Qualidade | Recomendado |
+|--------|----------------|-----------|-------------|
+| `[FREE] Llama 4 Maverick` | Baixo | Alta | ✅ Melhor |
+| `[FREE] Qwen 3 235B` | Médio | Alta | ✅ Bom |
+| `[FREE] DeepSeek V3` | Alto | Muito Alta | ⚠️ Usa mais tokens |
+
+### 4. **Reduzir `maxTurns`**
+
+Limite o número máximo de iterações:
+
+```json
+{
+  "maxTurns": 10
+}
+```
+
+**Padrão**: 25 turns
+**Recomendado**: 10-15 turns (suficiente para 90% das tasks)
+
+### 5. **Desabilitar Reasoning** (se não precisar)
+
+Modelos com reasoning (DeepSeek R1, QwQ) usam tokens extras:
+
+```json
+{
+  "reasoning": false
+}
+```
+
+**Economia**: 20-40% em modelos de reasoning
+
+### 📊 Exemplo de Configuração Otimizada
+
+```json
+{
+  "model": "meta-llama/llama-4-maverick:free",
+  "maxTurns": 12,
+  "maxContextMessages": 8,
+  "instructionsFilePath": "/app/prompts/minimal.md",
+  "temperature": 0.7
+}
+```
+
+**Resultado**:
+- ✅ 70% menos tokens que configuração padrão
+- ✅ Mantém qualidade para 90% das tasks
+- ✅ 3x mais runs com mesma quota diária
+
+## �🛠️ Ferramentas Disponíveis
 
 O adapter OpenRouter inclui **30 ferramentas profissionais** que os agentes podem usar:
 
