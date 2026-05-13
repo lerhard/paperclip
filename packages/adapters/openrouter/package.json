@@ -4,6 +4,8 @@
   "description": "OpenRouter adapter for Paperclip — access 300+ AI models (free & paid) via a single API key",
   "license": "MIT",
   "type": "module",
+  "main": "./dist/plugin.js",
+  "types": "./dist/plugin.d.ts",
   "exports": {
     ".": {
       "types": "./dist/plugin.d.ts",
