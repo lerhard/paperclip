@@ -94,6 +94,39 @@ const DEFAULT_SYSTEM_PROMPT =
   "Use the tools available to you to read context, post comments, update status, and delegate work. " +
   "When finished, call update_issue_status with status='done' and post a summary comment.";
 
+/**
+ * Collect all available OpenRouter API keys into a round-robin pool.
+ * Priority: config.apiKey > OPENROUTER_API_KEY > OPENROUTER_API_KEY_2,3...
+ */
+function collectApiKeys(config: OpenRouterConfig): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+
+  // Primary key from config
+  if (config.apiKey) {
+    keys.push(config.apiKey);
+    seen.add(config.apiKey);
+  }
+
+  // Primary env key
+  const primaryEnv = process.env.OPENROUTER_API_KEY;
+  if (primaryEnv && !seen.has(primaryEnv)) {
+    keys.push(primaryEnv);
+    seen.add(primaryEnv);
+  }
+
+  // Fallback keys OPENROUTER_API_KEY_2 through _20
+  for (let i = 2; i <= 20; i++) {
+    const key = process.env[`OPENROUTER_API_KEY_${i}`];
+    if (key && !seen.has(key)) {
+      keys.push(key);
+      seen.add(key);
+    }
+  }
+
+  return keys;
+}
+
 function resolveApiKey(config: OpenRouterConfig, useFallback = false): string {
   if (useFallback) {
     const fallbackKey = process.env.OPENROUTER_API_KEY_FALLBACK || "";
@@ -101,7 +134,7 @@ function resolveApiKey(config: OpenRouterConfig, useFallback = false): string {
       return fallbackKey;
     }
   }
-  
+
   const key = config.apiKey || process.env.OPENROUTER_API_KEY || "";
   if (!key) {
     throw new Error(
@@ -109,6 +142,27 @@ function resolveApiKey(config: OpenRouterConfig, useFallback = false): string {
     );
   }
   return key;
+}
+
+/**
+ * Extract rate-limit reset timestamp from response headers (in ms).
+ * Falls back to Date header + 60s if not present.
+ */
+function extractRateLimitReset(response: Response): number {
+  const resetHeader = response.headers.get("x-ratelimit-reset");
+  if (resetHeader) {
+    const ts = parseInt(resetHeader, 10);
+    if (!isNaN(ts)) return ts;
+  }
+  // OpenRouter returns reset as epoch ms; if missing, default to 60s from now
+  return Date.now() + 60_000;
+}
+
+/**
+ * Sleep for a given duration.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function resolveBillingType(config: OpenRouterConfig): "api" | "subscription" {
@@ -151,7 +205,7 @@ function safeParseToolArgs(raw: string): Record<string, unknown> {
 }
 
 async function callOpenRouter(
-  apiKey: string,
+  _apiKey: string,
   config: OpenRouterConfig,
   messages: ChatMessage[],
   tools: Tool[],
@@ -173,84 +227,85 @@ async function callOpenRouter(
   if (config.transforms?.length) body.transforms = config.transforms;
   if (config.route) body.route = config.route;
 
-  const response = await fetch(OPENROUTER_CHAT_ENDPOINT, {
-    method: "POST",
-    headers: buildHeaders(apiKey, config),
-    body: JSON.stringify(body),
-  });
+  const allKeys = collectApiKeys(config);
+  if (allKeys.length === 0) {
+    throw new Error("No OpenRouter API keys available.");
+  }
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => "");
-    
-    // Check if it's a daily rate limit error
-    if (response.status === 429 && errText.includes("free-models-per-day")) {
-      // Try fallback keys in sequence: OPENROUTER_API_KEY_2, _3, _4, etc.
-      const maxFallbacks = 10; // Support up to 10 API keys total
-      const usedKeys = new Set([apiKey]); // Track already tried keys
-      
-      for (let i = 2; i <= maxFallbacks; i++) {
-        const fallbackKey = process.env[`OPENROUTER_API_KEY_${i}`];
-        
-        // Skip if key doesn't exist or was already tried
-        if (!fallbackKey || usedKeys.has(fallbackKey)) {
-          continue;
-        }
-        
-        usedKeys.add(fallbackKey);
-        
+  const MAX_RETRIES = 5;
+  let lastErrText = "";
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // Round-robin: pick key based on attempt index so each retry cycles keys
+    const keyIndex = attempt % allKeys.length;
+    const currentKey = allKeys[keyIndex];
+
+    const response = await fetch(OPENROUTER_CHAT_ENDPOINT, {
+      method: "POST",
+      headers: buildHeaders(currentKey, config),
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) {
+      const json = (await response.json()) as ChatCompletionResponse;
+      return { response: json, usedKey: currentKey };
+    }
+
+    lastErrText = await response.text().catch(() => "");
+
+    // ── 429 Rate limit ──
+    if (response.status === 429) {
+      // Extract reset timestamp from headers (OpenRouter sends epoch ms)
+      const resetTs = extractRateLimitReset(response);
+      const now = Date.now();
+      const waitMs = Math.max(0, resetTs - now);
+      const waitSec = Math.ceil(waitMs / 1000);
+
+      // Determine if it's daily or per-minute limit
+      const isDailyLimit = lastErrText.includes("free-models-per-day");
+      const isMinLimit = lastErrText.includes("free-models-per-min");
+
+      if (isDailyLimit) {
+        // Daily limit: this key is exhausted, try next on next attempt
         if (onLog) {
           await writeRawStderr(
             onLog,
-            `[openrouter] Daily rate limit hit. Trying API key #${i}...`
+            `[openrouter] Daily limit on key #${keyIndex + 1}. Rotating to next key...`
           );
         }
-        
-        // Retry with this fallback key
-        const fallbackResponse = await fetch(OPENROUTER_CHAT_ENDPOINT, {
-          method: "POST",
-          headers: buildHeaders(fallbackKey, config),
-          body: JSON.stringify(body),
-        });
-        
-        if (fallbackResponse.ok) {
-          // Success! Use this key
-          if (onLog) {
-            await writeRawStderr(
-              onLog,
-              `[openrouter] ✅ Successfully switched to API key #${i}!`
-            );
-          }
-          
-          const json = (await fallbackResponse.json()) as ChatCompletionResponse;
-          return { response: json, usedKey: fallbackKey };
-        }
-        
-        // This fallback also failed, check if it's also rate limited
-        const fallbackErrText = await fallbackResponse.text().catch(() => "");
-        if (fallbackResponse.status === 429 && fallbackErrText.includes("free-models-per-day")) {
-          // This key is also rate limited, try next one
-          if (onLog) {
-            await writeRawStderr(
-              onLog,
-              `[openrouter] API key #${i} also rate limited, trying next...`
-            );
-          }
-          continue;
-        }
-        
-        // Different error, throw it
-        throw new Error(`OpenRouter API error with key #${i} (${fallbackResponse.status}): ${fallbackErrText}`);
+        // Continue to next attempt which will use the next key
+        continue;
       }
-      
-      // All fallback keys exhausted or rate limited
-      throw new Error(`OpenRouter API error (${response.status}): All API keys exhausted or rate limited. ${errText}`);
+
+      if (isMinLimit && waitMs > 0) {
+        // Per-minute limit: wait until reset, then retry
+        if (onLog) {
+          await writeRawStderr(
+            onLog,
+            `[openrouter] Rate limit (per-min) — waiting ${waitSec}s for reset (key #${keyIndex + 1}/${allKeys.length}, attempt ${attempt + 1}/${MAX_RETRIES})...`
+          );
+        }
+        await sleep(waitMs + 500); // +500ms buffer
+        continue; // Retry with same or next key
+      }
+
+      // Generic 429 — backoff exponentially
+      const backoffMs = Math.min(1000 * Math.pow(2, attempt), 30_000);
+      if (onLog) {
+        await writeRawStderr(
+          onLog,
+          `[openrouter] Rate limit (generic 429) — backing off ${backoffMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})...`
+        );
+      }
+      await sleep(backoffMs);
+      continue;
     }
-    
-    throw new Error(`OpenRouter API error (${response.status}): ${errText}`);
+
+    // Non-429 error — don't retry
+    throw new Error(`OpenRouter API error (${response.status}): ${lastErrText}`);
   }
 
-  const json = (await response.json()) as ChatCompletionResponse;
-  return { response: json, usedKey: apiKey };
+  throw new Error(`OpenRouter API error (429): All ${allKeys.length} key(s) exhausted after ${MAX_RETRIES} attempts. ${lastErrText}`);
 }
 
 async function fetchGenerationCost(
