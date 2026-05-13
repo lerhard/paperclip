@@ -5,6 +5,7 @@
   "scripts": {
     "preflight:workspace-links": "node cli/node_modules/tsx/dist/cli.mjs scripts/ensure-workspace-package-links.ts",
     "dev": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-runner.ts watch",
+    "dev:full": "pnpm build:adapters && pnpm dev",
     "dev:watch": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-runner.ts watch",
     "dev:once": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-runner.ts dev",
     "dev:list": "pnpm --filter @paperclipai/server exec tsx ../scripts/dev-service.ts list",
@@ -14,6 +15,9 @@
     "storybook": "pnpm --filter @paperclipai/ui storybook",
     "build-storybook": "pnpm --filter @paperclipai/ui build-storybook",
     "build": "pnpm run preflight:workspace-links && pnpm -r build",
+    "build:adapters": "pnpm --filter './packages/adapters/*' build",
+    "build:openrouter": "pnpm --filter @paperclipai/adapter-openrouter build",
+    "build:codex": "pnpm --filter @paperclipai/adapter-codex-local build",
     "typecheck": "pnpm run preflight:workspace-links && pnpm -r typecheck",
     "typecheck:build-gaps": "pnpm run preflight:workspace-links && node scripts/run-typecheck-build-gaps.mjs",
     "test": "pnpm run test:run",
