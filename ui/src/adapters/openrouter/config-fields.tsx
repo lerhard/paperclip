@@ -31,12 +31,12 @@ export function OpenRouterConfigFields({
             type="number"
             value={
               isCreate
-                ? String(values!.maxTurns ?? "")
+                ? String((values as any)?.maxTurns ?? "")
                 : eff("adapterConfig", "maxTurns", String(config.maxTurns ?? ""))
             }
             onCommit={(v) =>
               isCreate
-                ? set!({ maxTurns: v ? parseInt(v, 10) : undefined })
+                ? set!({ maxTurns: v ? parseInt(v, 10) : undefined } as any)
                 : mark("adapterConfig", "maxTurns", v ? parseInt(v, 10) : undefined)
             }
             immediate
@@ -55,12 +55,12 @@ export function OpenRouterConfigFields({
             type="number"
             value={
               isCreate
-                ? String(values!.maxContextMessages ?? "")
+                ? String((values as any)?.maxContextMessages ?? "")
                 : eff("adapterConfig", "maxContextMessages", String(config.maxContextMessages ?? ""))
             }
             onCommit={(v) =>
               isCreate
-                ? set!({ maxContextMessages: v ? parseInt(v, 10) : undefined })
+                ? set!({ maxContextMessages: v ? parseInt(v, 10) : undefined } as any)
                 : mark("adapterConfig", "maxContextMessages", v ? parseInt(v, 10) : undefined)
             }
             immediate
@@ -74,14 +74,14 @@ export function OpenRouterConfigFields({
         <ToggleField
           label="Compress Tool Results"
           hint="Use TOON/Varman compression on tool results for 30-50% token savings. Safe to enable."
-          value={
+          checked={
             isCreate
-              ? Boolean(values!.compressToolResults)
+              ? Boolean((values as any)?.compressToolResults)
               : eff("adapterConfig", "compressToolResults", Boolean(config.compressToolResults))
           }
           onChange={(v) =>
             isCreate
-              ? set!({ compressToolResults: v })
+              ? set!({ compressToolResults: v } as any)
               : mark("adapterConfig", "compressToolResults", v)
           }
         />
@@ -89,14 +89,14 @@ export function OpenRouterConfigFields({
         <ToggleField
           label="Use RTK (Reduced Token Keys)"
           hint="Abbreviate JSON keys (id→i, name→n, etc). Adds 20-40% savings. Requires compressToolResults."
-          value={
+          checked={
             isCreate
-              ? Boolean(values!.useRTK)
+              ? Boolean((values as any)?.useRTK)
               : eff("adapterConfig", "useRTK", Boolean(config.useRTK))
           }
           onChange={(v) =>
             isCreate
-              ? set!({ useRTK: v })
+              ? set!({ useRTK: v } as any)
               : mark("adapterConfig", "useRTK", v)
           }
         />
@@ -104,14 +104,14 @@ export function OpenRouterConfigFields({
         <ToggleField
           label="Use Caveman Compression"
           hint="Ultra-minimal English (removes articles, prepositions). 30-50% text savings. Use with caution."
-          value={
+          checked={
             isCreate
-              ? Boolean(values!.useCaveman)
+              ? Boolean((values as any)?.useCaveman)
               : eff("adapterConfig", "useCaveman", Boolean(config.useCaveman))
           }
           onChange={(v) =>
             isCreate
-              ? set!({ useCaveman: v })
+              ? set!({ useCaveman: v } as any)
               : mark("adapterConfig", "useCaveman", v)
           }
         />
