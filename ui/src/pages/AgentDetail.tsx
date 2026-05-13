@@ -31,6 +31,7 @@ import { redactCommandText as redactCommandSecretText } from "@paperclipai/adapt
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { assetsApi } from "../api/assets";
 import { getUIAdapter, buildTranscript, onAdapterChange } from "../adapters";
+import type { TranscriptEntry } from "../adapters";
 import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { MarkdownBody } from "../components/MarkdownBody";
@@ -3874,10 +3875,28 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
     return onAdapterChange(() => setParserTick((t) => t + 1));
   }, []);
 
-  const transcript = useMemo(
-    () => buildTranscript(logLines, adapter, { censorUsernameInLogs }),
-    [adapter, censorUsernameInLogs, logLines, parserTick],
-  );
+  const transcript = useMemo(() => {
+    const base = buildTranscript(logLines, adapter, { censorUsernameInLogs });
+    // Inject OpenRouter rate limit summary from sessionParams if available
+    const resultJson = run.resultJson as Record<string, unknown> | null;
+    const sessionParams = resultJson?.sessionParams as Record<string, unknown> | null;
+    const rateLimits = sessionParams?.openrouterRateLimits as Record<string, { requests: number; remaining: number; limit: number; resetInSec: number }> | null;
+    if (rateLimits && Object.keys(rateLimits).length > 0) {
+      const lines: string[] = [];
+      for (const [masked, rl] of Object.entries(rateLimits)) {
+        const resetIn = rl.resetInSec < 60 ? `${rl.resetInSec}s` : `${Math.floor(rl.resetInSec / 60)}m ${rl.resetInSec % 60}s`;
+        lines.push(`${masked}: ${rl.requests} req, ${rl.remaining}/${rl.limit} rem, resets in ${resetIn}`);
+      }
+      const now = new Date().toISOString();
+      const entry: TranscriptEntry = {
+        kind: "system",
+        ts: now,
+        text: `OpenRouter rate limits — ${lines.join("; ")}`,
+      };
+      return [...base, entry];
+    }
+    return base;
+  }, [adapter, censorUsernameInLogs, logLines, parserTick, run.resultJson]);
 
   useEffect(() => {
     setTranscriptMode("nice");
