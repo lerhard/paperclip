@@ -285,6 +285,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     autoApprove?: boolean;
     maxContextMessages?: number;
     compressToolResults?: boolean;
+    useRTK?: boolean;
+    useCaveman?: boolean;
   };
   const { context, onLog, agent, authToken } = ctx;
 
@@ -295,6 +297,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ? config.maxContextMessages 
     : undefined;
   const compressToolResults = config.compressToolResults === true;
+  const useRTK = config.useRTK === true;
+  const useCaveman = config.useCaveman === true;
 
   // Tool handlers need a Paperclip API client. If we have no authToken,
   // tools are disabled (model can still respond, just can't act).
@@ -574,27 +578,53 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           }
         }
 
-        // Apply TOON/Varman compression if enabled
+        // Apply compression if enabled
         let compressedContent = resultContent;
         if (compressToolResults && resultContent.length > 100) {
           try {
-            // Try to parse as JSON first for TOON compression
+            // Try to parse as JSON first for structured compression
             const parsed = JSON.parse(resultContent);
-            compressedContent = compressToolResult(parsed);
+            compressedContent = compressToolResult(parsed, {
+              useTOON: true,
+              useRTK,
+              useCaveman: false, // Caveman is for text, not JSON
+              useVarman: true,
+            });
             
             // Log savings on first compressed result
             if (turn === 1) {
               const savings = estimateTokenSavings(resultContent, compressedContent);
               if (savings > 10) {
+                const techniques = [];
+                if (compressedContent.includes("[RTK+TOON]")) techniques.push("RTK+TOON");
+                else if (compressedContent.includes("[TOON]")) techniques.push("TOON");
+                else if (compressedContent.includes("[RTK]")) techniques.push("RTK");
+                
                 await writeRawStderr(
                   onLog,
-                  `[openrouter] TOON/Varman compression: ~${savings}% token reduction on tool results`
+                  `[openrouter] ${techniques.join("+")} compression: ~${savings}% token reduction on tool results`
                 );
               }
             }
           } catch {
-            // Not JSON, apply Varman text compression
-            compressedContent = compressToolResult(resultContent);
+            // Not JSON, apply text compression
+            compressedContent = compressToolResult(resultContent, {
+              useTOON: false,
+              useRTK: false,
+              useCaveman,
+              useVarman: !useCaveman, // Use Varman if not using Caveman
+            });
+            
+            // Log Caveman compression
+            if (useCaveman && turn === 1) {
+              const savings = estimateTokenSavings(resultContent, compressedContent);
+              if (savings > 10) {
+                await writeRawStderr(
+                  onLog,
+                  `[openrouter] CAVEMAN compression: ~${savings}% token reduction on text`
+                );
+              }
+            }
           }
         }
 
