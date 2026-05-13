@@ -126,3 +126,13 @@ export interface CostByProject {
   cachedInputTokens: number;
   outputTokens: number;
 }
+
+/** per-API-key rate limit snapshot extracted from OpenRouter adapter sessionParams */
+export interface OpenRouterRateLimitEntry {
+  keyMask: string;
+  requests: number;
+  remaining: number;
+  limit: number;
+  resetInSec: number;
+  lastSeenAt: string;
+}

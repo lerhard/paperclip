@@ -459,6 +459,7 @@ export type {
   CostByAgentModel,
   CostWindowSpendRow,
   CostByProject,
+  OpenRouterRateLimitEntry,
   FinanceEvent,
   FinanceSummary,
   FinanceByBiller,

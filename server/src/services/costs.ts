@@ -451,6 +451,79 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .orderBy(costEvents.provider, costEvents.biller, costEvents.billingType, costEvents.model);
     },
 
+    /**
+     * Scan recent heartbeat runs for the openrouter provider and extract
+     * the latest rate-limit snapshot per API key from resultJson.sessionParams.
+     */
+    openrouterRateLimits: async (companyId: string) => {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const runs = await db
+        .select({
+          resultJson: heartbeatRuns.resultJson,
+          startedAt: heartbeatRuns.startedAt,
+        })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            gte(heartbeatRuns.startedAt, since),
+            isNotNull(heartbeatRuns.resultJson),
+          ),
+        )
+        .orderBy(desc(heartbeatRuns.startedAt))
+        .limit(200);
+
+      const merged = new Map<
+        string,
+        { requests: number; remaining: number; limit: number; resetInSec: number; lastSeenAt: Date }
+      >();
+
+      for (const run of runs) {
+        const result = (run.resultJson ?? {}) as Record<string, unknown>;
+        const sessionParams = (result.sessionParams ?? {}) as Record<string, unknown>;
+        const rateLimits = sessionParams.openrouterRateLimits as
+          | Record<string, { requests: number; remaining: number; limit: number; resetInSec: number }>
+          | undefined;
+        if (!rateLimits) continue;
+
+        for (const [key, rl] of Object.entries(rateLimits)) {
+          const existing = merged.get(key);
+          const seenAt = run.startedAt ?? new Date(0);
+          if (!existing || seenAt > existing.lastSeenAt) {
+            merged.set(key, {
+              requests: rl.requests ?? 0,
+              remaining: rl.remaining ?? 0,
+              limit: rl.limit ?? 0,
+              resetInSec: rl.resetInSec ?? 0,
+              lastSeenAt: seenAt,
+            });
+          }
+        }
+      }
+
+      const entries: Array<{
+        keyMask: string;
+        requests: number;
+        remaining: number;
+        limit: number;
+        resetInSec: number;
+        lastSeenAt: string;
+      }> = [];
+
+      for (const [keyMask, data] of merged.entries()) {
+        entries.push({
+          keyMask,
+          requests: data.requests,
+          remaining: data.remaining,
+          limit: data.limit,
+          resetInSec: data.resetInSec,
+          lastSeenAt: data.lastSeenAt.toISOString(),
+        });
+      }
+
+      return entries;
+    },
+
     byProject: async (companyId: string, range?: CostDateRange) => {
       const issueIdAsText = sql<string>`${issues.id}::text`;
       const runProjectLinks = db

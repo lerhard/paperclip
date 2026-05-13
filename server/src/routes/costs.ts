@@ -277,6 +277,13 @@ export function costRoutes(
     res.json(rows);
   });
 
+  router.get("/companies/:companyId/costs/openrouter-rate-limits", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const rows = await costs.openrouterRateLimits(companyId);
+    res.json(rows);
+  });
+
   router.patch("/companies/:companyId/budgets", validate(updateBudgetSchema), async (req, res) => {
     assertBoard(req);
     const companyId = req.params.companyId as string;

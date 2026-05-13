@@ -337,6 +337,14 @@ export function Costs() {
     staleTime: 60_000,
   });
 
+  const { data: openrouterRateData } = useQuery({
+    queryKey: queryKeys.openrouterRateLimits(companyId),
+    queryFn: () => costsApi.openrouterRateLimits(companyId),
+    enabled: !!selectedCompanyId && mainTab === "providers",
+    refetchInterval: 30_000,
+    staleTime: 10_000,
+  });
+
   const byProvider = useMemo(() => {
     const map = new Map<string, CostByProviderModel[]>();
     for (const row of providerData ?? []) {
@@ -953,6 +961,42 @@ export function Costs() {
             <p className="text-sm text-muted-foreground">Select a start and end date to load data.</p>
           ) : (
             <>
+              {openrouterRateData && openrouterRateData.length > 0 && (effectiveProvider === "all" || effectiveProvider === "openrouter") ? (
+                <Card className="border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))]">
+                  <CardHeader className="px-5 pt-5 pb-3">
+                    <CardTitle className="text-base">OpenRouter rate limits (last 24h)</CardTitle>
+                    <CardDescription>Per-key usage extracted from recent runs.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-3 px-5 pb-5 pt-0 md:grid-cols-2 lg:grid-cols-3">
+                    {openrouterRateData.map((rl) => {
+                      const pct = rl.limit > 0 ? Math.round(((rl.limit - rl.remaining) / rl.limit) * 100) : 0;
+                      const resetIn = rl.resetInSec < 60
+                        ? `${rl.resetInSec}s`
+                        : `${Math.floor(rl.resetInSec / 60)}m ${rl.resetInSec % 60}s`;
+                      return (
+                        <div key={rl.keyMask} className="rounded-md border border-border px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-xs text-muted-foreground truncate">{rl.keyMask}</span>
+                            <span className="text-xs tabular-nums">{rl.requests} req</span>
+                          </div>
+                          <div className="mt-1 flex items-center gap-2">
+                            <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-green-500"
+                                style={{ width: `${Math.max(0, Math.min(100, (rl.remaining / rl.limit) * 100))}%` }}
+                              />
+                            </div>
+                            <span className="text-xs tabular-nums shrink-0">{rl.remaining}/{rl.limit}</span>
+                          </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            {pct}% used · resets in {resetIn}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              ) : null}
               <Tabs value={effectiveProvider} onValueChange={setActiveProvider}>
                 <PageTabBar items={providerTabItems} value={effectiveProvider} />
 
