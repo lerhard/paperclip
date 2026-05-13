@@ -16,6 +16,12 @@ export interface OpenRouterFormValues {
   route?: string;
   httpReferer?: string;
   xTitle?: string;
+  // Token optimization fields
+  maxContextMessages?: string;
+  compressToolResults?: string | boolean;
+  useRTK?: string | boolean;
+  useCaveman?: string | boolean;
+  maxTurns?: string;
 }
 
 /**
@@ -73,6 +79,17 @@ export function buildConfig(
   // Leaderboard attribution
   if (formValues.httpReferer) config.httpReferer = formValues.httpReferer;
   if (formValues.xTitle) config.xTitle = formValues.xTitle;
+
+  // Token optimization
+  if (formValues.maxContextMessages !== undefined && formValues.maxContextMessages !== "") {
+    config.maxContextMessages = parseInt(formValues.maxContextMessages, 10);
+  }
+  if (formValues.maxTurns !== undefined && formValues.maxTurns !== "") {
+    config.maxTurns = parseInt(formValues.maxTurns, 10);
+  }
+  config.compressToolResults = formValues.compressToolResults === true || formValues.compressToolResults === "true";
+  config.useRTK = formValues.useRTK === true || formValues.useRTK === "true";
+  config.useCaveman = formValues.useCaveman === true || formValues.useCaveman === "true";
 
   return config;
 }
@@ -148,5 +165,47 @@ export const configFields = [
       { value: "no-fallback", label: "No Fallback (single provider only)" },
     ],
     defaultValue: "fallback",
+  },
+  // Token Optimization Section
+  {
+    key: "maxTurns",
+    label: "Max Turns",
+    type: "number" as const,
+    placeholder: "25",
+    required: false,
+    min: 1,
+    max: 100,
+    helpText: "Maximum number of tool-calling iterations (default: 25). Lower = fewer tokens.",
+  },
+  {
+    key: "maxContextMessages",
+    label: "Max Context Messages",
+    type: "number" as const,
+    placeholder: "unlimited",
+    required: false,
+    min: 4,
+    max: 50,
+    helpText: "Keep only last N messages in context. Recommended: 8-12 for 40-60% token savings.",
+  },
+  {
+    key: "compressToolResults",
+    label: "Compress Tool Results",
+    type: "toggle" as const,
+    defaultValue: false,
+    helpText: "Use TOON/Varman compression on tool results for 30-50% token savings. Safe to enable.",
+  },
+  {
+    key: "useRTK",
+    label: "Use RTK (Reduced Token Keys)",
+    type: "toggle" as const,
+    defaultValue: false,
+    helpText: "Abbreviate JSON keys (id→i, name→n, etc). Adds 20-40% savings. Requires compressToolResults.",
+  },
+  {
+    key: "useCaveman",
+    label: "Use Caveman Compression",
+    type: "toggle" as const,
+    defaultValue: false,
+    helpText: "Ultra-minimal English (removes articles, prepositions). 30-50% text savings. Use with caution.",
   },
 ];
