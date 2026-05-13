@@ -204,13 +204,42 @@ function safeParseToolArgs(raw: string): Record<string, unknown> {
   }
 }
 
+interface RateLimitStatus {
+  limit: number;
+  remaining: number;
+  resetTs: number;
+  used: number; // cumulative requests made with this key in this run
+}
+
+function maskKey(key: string): string {
+  return key.length > 12 ? key.slice(0, 8) + "..." + key.slice(-4) : "***";
+}
+
+function extractRateLimitStatus(response: Response): RateLimitStatus {
+  const limit = parseInt(response.headers.get("x-ratelimit-limit") || "0", 10);
+  const remaining = parseInt(response.headers.get("x-ratelimit-remaining") || "0", 10);
+  const resetTs = extractRateLimitReset(response);
+  return { limit: isNaN(limit) ? 0 : limit, remaining: isNaN(remaining) ? 0 : remaining, resetTs, used: 0 };
+}
+
+function formatRateLimitReset(resetTs: number): string {
+  const now = Date.now();
+  const ms = Math.max(0, resetTs - now);
+  if (ms <= 0) return "now";
+  const sec = Math.ceil(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  return remSec > 0 ? `${min}m ${remSec}s` : `${min}m`;
+}
+
 async function callOpenRouter(
   _apiKey: string,
   config: OpenRouterConfig,
   messages: ChatMessage[],
   tools: Tool[],
   onLog?: OnLog,
-): Promise<{ response: ChatCompletionResponse; usedKey: string }> {
+): Promise<{ response: ChatCompletionResponse; usedKey: string; rateLimit: RateLimitStatus }> {
   const body: Record<string, unknown> = {
     model: config.model || "openrouter/auto",
     messages,
@@ -248,7 +277,8 @@ async function callOpenRouter(
 
     if (response.ok) {
       const json = (await response.json()) as ChatCompletionResponse;
-      return { response: json, usedKey: currentKey };
+      const rateLimit = extractRateLimitStatus(response);
+      return { response: json, usedKey: currentKey, rateLimit };
     }
 
     lastErrText = await response.text().catch(() => "");
@@ -270,7 +300,7 @@ async function callOpenRouter(
         if (onLog) {
           await writeRawStderr(
             onLog,
-            `[openrouter] Daily limit on key #${keyIndex + 1}. Rotating to next key...`
+            `[openrouter] Daily limit on key #${keyIndex + 1} (${maskKey(currentKey)}). Rotating to next key...`
           );
         }
         // Continue to next attempt which will use the next key
@@ -282,7 +312,7 @@ async function callOpenRouter(
         if (onLog) {
           await writeRawStderr(
             onLog,
-            `[openrouter] Rate limit (per-min) — waiting ${waitSec}s for reset (key #${keyIndex + 1}/${allKeys.length}, attempt ${attempt + 1}/${MAX_RETRIES})...`
+            `[openrouter] Rate limit (per-min) — waiting ${waitSec}s for reset (key #${keyIndex + 1}/${allKeys.length} ${maskKey(currentKey)}, attempt ${attempt + 1}/${MAX_RETRIES})...`
           );
         }
         await sleep(waitMs + 500); // +500ms buffer
@@ -539,6 +569,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // misreads an error message and keeps "fixing" it the same wrong way.
   const recentCalls: string[] = [];
   const REPEAT_THRESHOLD = 3;
+  // Track per-key usage across the entire run
+  const keyUsage = new Map<string, { requests: number; rateLimit: RateLimitStatus }>();
 
   try {
     while (turn < maxTurns) {
@@ -567,6 +599,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         // Update apiKey if fallback was used
         if (result.usedKey !== apiKey) {
           apiKey = result.usedKey;
+        }
+        // Track per-key usage
+        const masked = maskKey(apiKey);
+        const existing = keyUsage.get(masked);
+        if (existing) {
+          existing.requests++;
+          existing.rateLimit = result.rateLimit;
+        } else {
+          keyUsage.set(masked, { requests: 1, rateLimit: result.rateLimit });
+        }
+        // Emit visible rate limit status
+        const rl = result.rateLimit;
+        if (rl.limit > 0) {
+          await emitSystem(
+            onLog,
+            `Rate limit — key ${masked}: ${rl.remaining}/${rl.limit} remaining, resets in ${formatRateLimitReset(rl.resetTs)} (used ${keyUsage.get(masked)?.requests ?? 1}x this run)`
+          );
         }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -787,6 +836,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         await writeRawStderr(onLog, `[openrouter] could not update final status: ${reason}`);
       }
     }
+  }
+
+  // Budget / rate limit summary
+  if (keyUsage.size > 0) {
+    const summaryLines: string[] = [];
+    for (const [masked, data] of keyUsage.entries()) {
+      const rl = data.rateLimit;
+      const resetIn = formatRateLimitReset(rl.resetTs);
+      summaryLines.push(`${masked}: ${data.requests} req, ${rl.remaining}/${rl.limit} rem, resets ${resetIn}`);
+    }
+    const costLine = costUsd !== null ? `cost=$${costUsd.toFixed(4)}` : "cost=unknown";
+    await emitSystem(
+      onLog,
+      `OpenRouter budget summary — ${costLine}, keys: ${summaryLines.join("; ")}`
+    );
   }
 
   // Emit the final result transcript entry.
