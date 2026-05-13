@@ -20,6 +20,9 @@ import {
   agentConfigurationDoc,
 } from "./index.js";
 
+// Re-export metadata for direct imports by server registry
+export { type, models, agentConfigurationDoc };
+
 /**
  * Factory function required by Paperclip's external adapter plugin system.
  * Returns a ServerAdapterModule that can be registered dynamically.
