@@ -5,11 +5,26 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./dist/plugin.js",
-    "./server": "./dist/server/index.js",
-    "./ui": "./dist/ui/index.js",
-    "./cli": "./dist/cli/index.js",
-    "./metadata": "./dist/index.js"
+    ".": {
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "default": "./dist/server/index.js"
+    },
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "default": "./dist/ui/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "default": "./dist/cli/index.js"
+    },
+    "./metadata": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsc",
