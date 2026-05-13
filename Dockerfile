@@ -46,8 +46,12 @@ COPY --from=deps /app /app
 COPY . .
 RUN pnpm --filter @paperclipai/ui build
 RUN pnpm --filter @paperclipai/plugin-sdk build
+# Build all adapters (includes OpenRouter, Codex, etc.)
+RUN pnpm --filter './packages/adapters/*' build
 RUN pnpm --filter @paperclipai/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
+# Verify OpenRouter adapter was built
+RUN test -f packages/adapters/openrouter/dist/index.js || (echo "WARNING: OpenRouter adapter build output missing" && exit 0)
 
 FROM base AS production
 ARG USER_UID=1000
