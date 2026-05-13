@@ -381,6 +381,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Emit init early so the run viewer renders the header.
   await emitInit(onLog, { model, sessionId: ctx.runId });
 
+  // Log active configuration so the operator can verify settings in the transcript.
+  const activeConfigParts: string[] = [`maxTurns=${maxTurns}`];
+  if (maxContextMessages) activeConfigParts.push(`maxContextMessages=${maxContextMessages}`);
+  if (compressToolResults) activeConfigParts.push("compressToolResults=true");
+  if (useRTK) activeConfigParts.push("useRTK=true");
+  if (useCaveman) activeConfigParts.push("useCaveman=true");
+  if (autoApprove) activeConfigParts.push("autoApprove=true");
+  await emitSystem(
+    onLog,
+    `OpenRouter adapter active config: ${activeConfigParts.join(", ")}`
+  );
+
   // ----- build messages -----
 
   const messages: ChatMessage[] = [];
@@ -635,6 +647,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
         // Apply compression if enabled
         let compressedContent = resultContent;
+        let didCompress = false;
+        let compressionTechnique = "";
+        let originalSize = resultContent.length;
+        let compressedSize = originalSize;
+
         if (compressToolResults && resultContent.length > 100) {
           try {
             // Try to parse as JSON first for structured compression
@@ -645,21 +662,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               useCaveman: false, // Caveman is for text, not JSON
               useVarman: true,
             });
-            
-            // Log savings on first compressed result
-            if (turn === 1) {
-              const savings = estimateTokenSavings(resultContent, compressedContent);
-              if (savings > 10) {
-                const techniques = [];
-                if (compressedContent.includes("[RTK+TOON]")) techniques.push("RTK+TOON");
-                else if (compressedContent.includes("[TOON]")) techniques.push("TOON");
-                else if (compressedContent.includes("[RTK]")) techniques.push("RTK");
-                
-                await writeRawStderr(
-                  onLog,
-                  `[openrouter] ${techniques.join("+")} compression: ~${savings}% token reduction on tool results`
-                );
-              }
+            didCompress = compressedContent !== resultContent && compressedContent.length < resultContent.length;
+            if (didCompress) {
+              if (compressedContent.includes("[RTK+TOON]")) compressionTechnique = "RTK+TOON";
+              else if (compressedContent.includes("[TOON]")) compressionTechnique = "TOON";
+              else if (compressedContent.includes("[RTK]")) compressionTechnique = "RTK";
+              else compressionTechnique = "Varman";
             }
           } catch {
             // Not JSON, apply text compression
@@ -669,24 +677,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               useCaveman,
               useVarman: !useCaveman, // Use Varman if not using Caveman
             });
-            
-            // Log Caveman compression
-            if (useCaveman && turn === 1) {
-              const savings = estimateTokenSavings(resultContent, compressedContent);
-              if (savings > 10) {
-                await writeRawStderr(
-                  onLog,
-                  `[openrouter] CAVEMAN compression: ~${savings}% token reduction on text`
-                );
-              }
+            didCompress = compressedContent !== resultContent && compressedContent.length < resultContent.length;
+            if (didCompress) {
+              compressionTechnique = useCaveman ? "Caveman" : "Varman";
             }
           }
+          compressedSize = compressedContent.length;
+        }
+
+        // Log compression stats as a visible system message (not just stderr)
+        if (didCompress) {
+          const saved = originalSize - compressedSize;
+          const pct = Math.round((saved / originalSize) * 100);
+          await emitSystem(
+            onLog,
+            `Compressed ${toolName} result: ${originalSize.toLocaleString()} → ${compressedSize.toLocaleString()} bytes (${pct}% reduction via ${compressionTechnique})`
+          );
         }
 
         await emitToolResult(onLog, {
           toolUseId: tc.id,
           toolName,
-          content: resultContent, // Show original in UI
+          content: resultContent, // Show original in UI for readability
           isError,
         });
 
