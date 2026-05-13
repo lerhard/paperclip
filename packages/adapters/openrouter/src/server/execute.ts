@@ -47,6 +47,7 @@ import {
   writeRawStderr,
   type OnLog,
 } from "./transcript.js";
+import { compressToolResult, estimateTokenSavings } from "./compression.js";
 
 // ----- types matching OpenRouter / OpenAI chat completions -----
 
@@ -283,6 +284,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     maxTurns?: number;
     autoApprove?: boolean;
     maxContextMessages?: number;
+    compressToolResults?: boolean;
   };
   const { context, onLog, agent, authToken } = ctx;
 
@@ -292,6 +294,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const maxContextMessages = typeof config.maxContextMessages === "number" && config.maxContextMessages > 0 
     ? config.maxContextMessages 
     : undefined;
+  const compressToolResults = config.compressToolResults === true;
 
   // Tool handlers need a Paperclip API client. If we have no authToken,
   // tools are disabled (model can still respond, just can't act).
@@ -571,17 +574,41 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           }
         }
 
+        // Apply TOON/Varman compression if enabled
+        let compressedContent = resultContent;
+        if (compressToolResults && resultContent.length > 100) {
+          try {
+            // Try to parse as JSON first for TOON compression
+            const parsed = JSON.parse(resultContent);
+            compressedContent = compressToolResult(parsed);
+            
+            // Log savings on first compressed result
+            if (turn === 1) {
+              const savings = estimateTokenSavings(resultContent, compressedContent);
+              if (savings > 10) {
+                await writeRawStderr(
+                  onLog,
+                  `[openrouter] TOON/Varman compression: ~${savings}% token reduction on tool results`
+                );
+              }
+            }
+          } catch {
+            // Not JSON, apply Varman text compression
+            compressedContent = compressToolResult(resultContent);
+          }
+        }
+
         await emitToolResult(onLog, {
           toolUseId: tc.id,
           toolName,
-          content: resultContent,
+          content: resultContent, // Show original in UI
           isError,
         });
 
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
-          content: resultContent,
+          content: compressedContent, // Send compressed to model
         });
 
         // Track repeat calls
