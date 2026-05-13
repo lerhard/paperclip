@@ -5,11 +5,11 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/plugin.ts",
-    "./server": "./src/server/index.ts",
-    "./ui": "./src/ui/index.ts",
-    "./cli": "./src/cli/index.ts",
-    "./metadata": "./src/index.ts"
+    ".": "./dist/plugin.js",
+    "./server": "./dist/server/index.js",
+    "./ui": "./dist/ui/index.js",
+    "./cli": "./dist/cli/index.js",
+    "./metadata": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
