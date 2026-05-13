@@ -102,5 +102,50 @@ export function buildCodexLocalConfig(v: CreateConfigValues): Record<string, unk
   }
   if (v.command) ac.command = v.command;
   if (v.extraArgs) ac.extraArgs = parseCommaArgs(v.extraArgs);
+  
+  // Token optimization (using index access to avoid type errors)
+  const vAny = v as any;
+  if (vAny.maxContextMessages !== undefined && vAny.maxContextMessages !== "") {
+    ac.maxContextMessages = typeof vAny.maxContextMessages === "number" 
+      ? vAny.maxContextMessages 
+      : parseInt(String(vAny.maxContextMessages), 10);
+  }
+  if (vAny.compressToolResults === true || vAny.compressToolResults === "true") {
+    ac.compressToolResults = true;
+  }
+  if (vAny.useRTK === true || vAny.useRTK === "true") {
+    ac.useRTK = true;
+  }
+  
   return ac;
 }
+
+/**
+ * Config form fields for Codex adapter
+ */
+export const codexConfigFields = [
+  {
+    key: "maxContextMessages",
+    label: "Max Context Messages",
+    type: "number" as const,
+    placeholder: "unlimited",
+    required: false,
+    min: 4,
+    max: 50,
+    helpText: "Keep only last N messages in context. Recommended: 10-15 for code generation (40-55% token savings).",
+  },
+  {
+    key: "compressToolResults",
+    label: "Compress Tool Results",
+    type: "toggle" as const,
+    defaultValue: false,
+    helpText: "Use TOON/Varman compression on tool results for 30-50% token savings. Code output is NEVER compressed.",
+  },
+  {
+    key: "useRTK",
+    label: "Use RTK (Reduced Token Keys)",
+    type: "toggle" as const,
+    defaultValue: false,
+    helpText: "Abbreviate JSON keys in tool results (id→i, name→n, etc). Adds 20-40% savings. Requires compressToolResults.",
+  },
+];
