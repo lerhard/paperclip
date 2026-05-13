@@ -331,7 +331,56 @@ async function callOpenRouter(
       continue;
     }
 
-    // Non-429 error — don't retry
+    // ── 400 Context length ──
+    if (response.status === 400) {
+      const isContextLength = /maximum context length|context length is|too many tokens|requested about \d+ tokens/i.test(lastErrText);
+      if (isContextLength && Array.isArray(body.messages)) {
+        const msgs = body.messages as ChatMessage[];
+
+        // Strategy 1: drop older non-system messages (keep system + last half)
+        if (msgs.length > 3) {
+          const keepCount = Math.max(2, Math.floor(msgs.length / 2));
+          const systemMsg = msgs[0];
+          const recent = msgs.slice(-keepCount);
+          const newMsgs = [systemMsg, ...recent];
+          body.messages = newMsgs;
+          if (onLog) {
+            await writeRawStderr(
+              onLog,
+              `[openrouter] Context too long, truncating ${msgs.length} → ${newMsgs.length} messages (attempt ${attempt + 1}/${MAX_RETRIES})...`,
+            );
+          }
+          continue;
+        }
+
+        // Strategy 2: truncate individual message contents
+        const maxChars = 6000;
+        let anyTruncated = false;
+        body.messages = msgs.map((m, i) => {
+          if (i === 0) return m; // preserve system
+          const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+          if (content.length > maxChars) {
+            anyTruncated = true;
+            return { ...m, content: content.slice(0, maxChars) + "\n... [truncated by context limit]" };
+          }
+          return m;
+        });
+        if (anyTruncated) {
+          if (onLog) {
+            await writeRawStderr(
+              onLog,
+              `[openrouter] Context too long, truncating long message contents (attempt ${attempt + 1}/${MAX_RETRIES})...`,
+            );
+          }
+          continue;
+        }
+      }
+
+      // Non-context-length 400 — don't retry
+      throw new Error(`OpenRouter API error (${response.status}): ${lastErrText}`);
+    }
+
+    // Non-429 / non-400-context-length error — don't retry
     throw new Error(`OpenRouter API error (${response.status}): ${lastErrText}`);
   }
 
