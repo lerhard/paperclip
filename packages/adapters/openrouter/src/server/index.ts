@@ -140,9 +140,12 @@ export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkil
 
 export async function syncSkills(
   ctx: AdapterSkillContext,
-  _desiredSkills: string[],
+  desiredSkills: string[],
 ): Promise<AdapterSkillSnapshot> {
   // v1: skills are managed externally (operator drops them in skillsRoot).
-  // We just return the current listing — no copy/sync work.
-  return listSkills(ctx);
+  // We return the current listing but preserve the desiredSkills array so
+  // the UI knows which skills the user selected.
+  const snapshot = await listSkills(ctx);
+  snapshot.desiredSkills = desiredSkills;
+  return snapshot;
 }
