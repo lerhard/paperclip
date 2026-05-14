@@ -218,42 +218,58 @@ export function reverseRTK(obj: unknown): unknown {
  *   "The user needs to fix the bug in the system"
  *   → "user fix bug system"
  */
+/** Heuristic: does this look like structured data/code rather than prose? */
+function looksLikeStructured(text: string): boolean {
+  const codeIndicators = /[{\[\]}<>]|\b\w+\(|https?:\/\/|function\s|const\s|let\s|var\s|\b\d+:\d+:\d+\b/;
+  const lines = text.split("\n");
+  const structuredLines = lines.filter((l) => codeIndicators.test(l)).length;
+  return structuredLines > lines.length * 0.3 || text.includes("```");
+}
+
 export function compressCaveman(text: string): string {
   if (!text || text.length < 50) return text;
-  
+
+  // Skip compression for code, JSON, logs, URLs, etc.
+  if (looksLikeStructured(text)) return text;
+
   let compressed = text;
-  
+
   // Remove articles
   compressed = compressed.replace(/\b(the|a|an)\b/gi, "");
-  
-  // Remove common prepositions
-  compressed = compressed.replace(/\b(in|on|at|to|for|of|with|from|by|about)\b/gi, "");
-  
+
+  // Remove common prepositions (but keep "to" for infinitive removal later)
+  compressed = compressed.replace(/\b(in|on|at|for|of|with|from|by|about)\b/gi, "");
+
   // Remove auxiliary verbs
   compressed = compressed.replace(/\b(is|are|was|were|be|been|being|am)\b/gi, "");
   compressed = compressed.replace(/\b(has|have|had|do|does|did|will|would|should|could|can|may|might)\b/gi, "");
-  
+
   // Remove pronouns (keep "I" and "you" for clarity)
   compressed = compressed.replace(/\b(he|she|it|they|them|their|his|her|its)\b/gi, "");
-  
+
   // Remove common conjunctions
   compressed = compressed.replace(/\b(and|or|but|so|yet|nor)\b/gi, "");
-  
-  // Remove "to" before verbs (infinitive marker)
+
+  // Remove "to" before verbs (infinitive marker) — do this AFTER removing other prepositions
   compressed = compressed.replace(/\bto\s+(\w+)/gi, "$1");
-  
+
   // Remove possessive 's
   compressed = compressed.replace(/'s\b/g, "");
-  
+
   // Remove punctuation except periods and commas (keep some structure)
   compressed = compressed.replace(/[?!;:()]/g, "");
-  
+
   // Collapse multiple spaces
   compressed = compressed.replace(/\s+/g, " ");
-  
+
   // Remove leading/trailing spaces
   compressed = compressed.trim();
-  
+
+  // Safety: if we removed too much, fall back to original
+  if (compressed.length < text.length * 0.15 || compressed.split(/\s+/).length < 3) {
+    return text;
+  }
+
   return compressed;
 }
 
