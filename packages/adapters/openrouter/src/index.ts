@@ -117,5 +117,13 @@ export interface OpenRouterConfig {
    * prepended to the system prompt. Takes precedence over systemPrompt
    * if both are set. */
   instructionsFilePath?: string;
+  /** Max messages to keep in context. Default: unlimited (undefined). */
+  maxContextMessages?: number;
+  /** Enable TOON/Varman compression on tool results. Default false. */
+  compressToolResults?: boolean;
+  /** Use RTK (Reduced Token Keys) for JSON key abbreviation. Default false. */
+  useRTK?: boolean;
+  /** Use Caveman ultra-minimal text compression. Default false. */
+  useCaveman?: boolean;
 }
 

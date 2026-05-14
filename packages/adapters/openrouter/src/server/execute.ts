@@ -414,14 +414,7 @@ async function fetchGenerationCost(
 // ----- main -----
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const config = (ctx.agent.adapterConfig ?? ctx.config) as unknown as OpenRouterConfig & {
-    maxTurns?: number;
-    autoApprove?: boolean;
-    maxContextMessages?: number;
-    compressToolResults?: boolean;
-    useRTK?: boolean;
-    useCaveman?: boolean;
-  };
+  const config = (ctx.agent.adapterConfig ?? ctx.config) as unknown as OpenRouterConfig;
   const { context, onLog, agent, authToken } = ctx;
 
   const model = config.model || "openrouter/auto";
