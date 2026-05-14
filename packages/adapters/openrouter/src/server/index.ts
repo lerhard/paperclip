@@ -89,13 +89,28 @@ function defaultSkillsRoot(): string {
   return path.join(home, ".openrouter-adapter", "skills");
 }
 
-export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkillSnapshot> {
+export async function listSkills(ctx: AdapterSkillContext): Promise<AdapterSkillSnapshot> {
   const root = process.env.PAPERCLIP_SKILLS_DIR?.trim() || defaultSkillsRoot();
+
+  // Read desired skills from adapter config (written by writePaperclipSkillSyncPreference)
+  const rawSync = ctx.config.paperclipSkillSync;
+  const desiredSkills: string[] =
+    typeof rawSync === "object" && rawSync !== null && !Array.isArray(rawSync)
+      ? Array.from(
+          new Set(
+            ((rawSync as Record<string, unknown>).desiredSkills as unknown[])
+              ?.filter((v): v is string => typeof v === "string")
+              .map((s) => s.trim())
+              .filter(Boolean) ?? [],
+          ),
+        )
+      : [];
+
   const snapshot: AdapterSkillSnapshot = {
     adapterType: "openrouter",
     supported: true,
     mode: "ephemeral",
-    desiredSkills: [],
+    desiredSkills,
     entries: [],
     warnings: [],
   };
@@ -112,6 +127,7 @@ export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkil
     }
   }
 
+  const desiredSet = new Set(desiredSkills);
   for (const entry of entries) {
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const skillDir = path.join(root, entry.name);
@@ -126,7 +142,7 @@ export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkil
     snapshot.entries.push({
       key: entry.name,
       runtimeName: entry.name,
-      desired: true,
+      desired: desiredSet.has(entry.name),
       managed: false,
       state: "external",
       origin: "external_unknown",
