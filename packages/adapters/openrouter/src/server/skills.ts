@@ -58,8 +58,11 @@ export async function loadSkills(params: LoadSkillsParams): Promise<LoadedSkill[
   const root = resolveSkillsRoot(agentConfig);
 
   if (!(await pathExists(root))) {
-    // Not an error — most agents won't have skills configured.
-    return [];
+    try {
+      await fs.mkdir(root, { recursive: true });
+    } catch {
+      return [];
+    }
   }
 
   let entries: import("node:fs").Dirent[];

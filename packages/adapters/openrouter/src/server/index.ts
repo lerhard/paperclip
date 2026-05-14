@@ -104,8 +104,12 @@ export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkil
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch {
-    snapshot.warnings.push(`Skills root ${root} not present.`);
-    return snapshot;
+    try {
+      await fs.mkdir(root, { recursive: true });
+    } catch {
+      snapshot.warnings.push(`Skills root ${root} not present.`);
+      return snapshot;
+    }
   }
 
   for (const entry of entries) {
