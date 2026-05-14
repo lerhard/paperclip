@@ -8015,7 +8015,19 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           legacySessionId: runtimeForAdapter.sessionId,
         });
 
-        if (taskKey && (previousSessionParams || previousSessionDisplayId || taskSession)) {
+        const isStaleSessionError = /session.*not.*found|unknown.*session|invalid.*session|cannot.*resume|failed.*to.*resume|resume.*not.*found|checkpoint.*not.*found/i.test(
+          `${message}\n${stderrExcerpt}`,
+        );
+        if (taskKey && isStaleSessionError) {
+          await clearTaskSessions(agent.companyId, agent.id, {
+            taskKey,
+            adapterType: agent.adapterType,
+          });
+          logger.info(
+            { runId, agentId: agent.id, taskKey, adapterType: agent.adapterType },
+            "Cleared stale task session after session error",
+          );
+        } else if (taskKey && (previousSessionParams || previousSessionDisplayId || taskSession)) {
           await upsertTaskSession({
             companyId: agent.companyId,
             agentId: agent.id,
