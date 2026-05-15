@@ -664,7 +664,11 @@ export async function ensureAdapterExecutionTargetRuntimeCommandInstalled(input:
   onLog?: AdapterExecutionTargetShellOptions["onLog"];
 }): Promise<void> {
   const installCommand = input.installCommand?.trim();
-  if (!installCommand || input.target?.kind !== "remote" || input.target.transport !== "sandbox") {
+  const canRunInstall =
+    !input.target ||
+    input.target.kind === "local" ||
+    (input.target.kind === "remote" && input.target.transport === "sandbox");
+  if (!installCommand || !canRunInstall) {
     return;
   }
 

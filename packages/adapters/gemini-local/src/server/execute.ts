@@ -493,8 +493,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     apiAccessNote,
     renderedPrompt,
   ]);
+  const cliPrompt = prompt.trim().length > 0 ? prompt : "Continue your work.";
   const promptMetrics = {
-    promptChars: prompt.length,
+    promptChars: cliPrompt.length,
     instructionsChars: instructionsPrefix.length,
     bootstrapPromptChars: renderedBootstrapPrompt.length,
     wakePromptChars: wakePrompt.length,
@@ -514,7 +515,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--sandbox=none");
     }
     if (extraArgs.length > 0) args.push(...extraArgs);
-    args.push("--prompt", prompt);
+    args.push("--prompt", cliPrompt);
     return args;
   };
 
@@ -527,10 +528,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         cwd: effectiveExecutionCwd,
         commandNotes,
         commandArgs: args.map((value, index) => (
-          index === args.length - 1 ? `<prompt ${prompt.length} chars>` : value
+          index === args.length - 1 ? `<prompt ${cliPrompt.length} chars>` : value
         )),
         env: loggedEnv,
-        prompt,
+        prompt: cliPrompt,
         promptMetrics,
         context,
       });
