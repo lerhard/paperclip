@@ -27,7 +27,15 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { FolderOpen, Heart, ChevronDown, X } from "lucide-react";
+import { FolderOpen, Heart, ChevronDown, X, Plus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { asBoolean, asFiniteNumber, asObject, cn } from "../lib/utils";
 import { extractModelName, extractProviderId } from "../lib/model-utils";
 import { queryKeys } from "../lib/queryKeys";
@@ -121,7 +129,8 @@ function isOverlayDirty(o: AgentConfigOverlay): boolean {
     Object.keys(o.adapterConfig).length > 0 ||
     Object.keys(o.heartbeat).length > 0 ||
     Object.keys(o.runtime).length > 0 ||
-    o.modelProfiles?.cheap !== undefined
+    o.modelProfiles?.cheap !== undefined ||
+    o.fallbackChain !== undefined
   );
 }
 
@@ -309,6 +318,56 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   const config = !isCreate ? ((props.agent.adapterConfig ?? {}) as Record<string, unknown>) : {};
   const runtimeConfig = !isCreate ? ((props.agent.runtimeConfig ?? {}) as Record<string, unknown>) : {};
   const heartbeat = !isCreate ? ((runtimeConfig.heartbeat ?? {}) as Record<string, unknown>) : {};
+
+  // ---- Fallback chain state ----
+  const existingFallbackChain = useMemo(() => {
+    const raw = runtimeConfig.fallbackChain;
+    if (Array.isArray(raw)) {
+      return raw.filter(
+        (entry): entry is { adapterType: string; adapterConfig?: Record<string, unknown> } =>
+          typeof entry === "object" &&
+          entry !== null &&
+          typeof (entry as Record<string, unknown>).adapterType === "string",
+      );
+    }
+    return [];
+  }, [runtimeConfig.fallbackChain]);
+
+  const effectiveFallbackChain = overlay.fallbackChain !== undefined
+    ? overlay.fallbackChain
+    : existingFallbackChain;
+
+  function setFallbackChain(chain: { adapterType: string; adapterConfig?: Record<string, unknown> }[] | null) {
+    setOverlay((prev) => ({ ...prev, fallbackChain: chain }));
+  }
+
+  function addFallbackEntry() {
+    const current = effectiveFallbackChain ?? [];
+    setFallbackChain([...current, { adapterType: "", adapterConfig: {} }]);
+  }
+
+  function updateFallbackEntry(index: number, patch: Partial<{ adapterType: string; adapterConfig: Record<string, unknown> }>) {
+    const current = effectiveFallbackChain ?? [];
+    const next = current.map((entry, i) =>
+      i === index ? { ...entry, ...patch } : entry,
+    );
+    setFallbackChain(next);
+  }
+
+  function removeFallbackEntry(index: number) {
+    const current = effectiveFallbackChain ?? [];
+    const next = current.filter((_, i) => i !== index);
+    setFallbackChain(next.length > 0 ? next : null);
+  }
+
+  function moveFallbackEntry(index: number, direction: -1 | 1) {
+    const current = effectiveFallbackChain ?? [];
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= current.length) return;
+    const next = [...current];
+    [next[index], next[newIndex]] = [next[newIndex], next[index]];
+    setFallbackChain(next);
+  }
 
   const adapterType = isCreate
     ? props.values.adapterType
@@ -1165,6 +1224,104 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                   </Field>
                 </>
               )}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Fallback Chain ---- */}
+      {!isCreate && (
+        <div className={cn(!cards && "border-b border-border")}>
+          {cards
+            ? <h3 className="text-sm font-medium mb-3">Fallback Adapters</h3>
+            : <div className="px-4 py-2 text-xs font-medium text-muted-foreground">Fallback Adapters</div>
+          }
+          <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
+            <div className="text-xs text-muted-foreground">
+              If the primary adapter fails (e.g. rate limit), try these adapters in order.
+            </div>
+            {(effectiveFallbackChain ?? []).length === 0 ? (
+              <div className="text-xs text-muted-foreground italic">No fallback adapters configured.</div>
+            ) : (
+              <div className="space-y-2">
+                {(effectiveFallbackChain ?? []).map((entry, index) => (
+                  <div key={index} className="rounded-md border border-border p-2 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-muted-foreground w-4">{index + 1}</span>
+                      <Select
+                        value={entry.adapterType}
+                        onValueChange={(v) => updateFallbackEntry(index, { adapterType: v })}
+                      >
+                        <SelectTrigger className="flex-1 text-sm h-8">
+                          <SelectValue placeholder="Select adapter" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {listAdapterOptions().map((opt) => (
+                            <SelectItem key={opt.value} value={opt.value} disabled={opt.comingSoon}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        disabled={index === 0}
+                        onClick={() => moveFallbackEntry(index, -1)}
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        disabled={index === (effectiveFallbackChain ?? []).length - 1}
+                        onClick={() => moveFallbackEntry(index, 1)}
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-destructive"
+                        onClick={() => removeFallbackEntry(index)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    <Field label="Adapter config (JSON)" hint="Optional config overrides for this fallback adapter">
+                      <Textarea
+                        value={entry.adapterConfig ? JSON.stringify(entry.adapterConfig, null, 2) : ""}
+                        onChange={(e) => {
+                          const text = e.target.value.trim();
+                          if (!text) {
+                            updateFallbackEntry(index, { adapterConfig: {} });
+                            return;
+                          }
+                          try {
+                            const parsed = JSON.parse(text);
+                            updateFallbackEntry(index, { adapterConfig: parsed });
+                          } catch {
+                            // Allow invalid JSON while typing; only store valid JSON
+                          }
+                        }}
+                        className="min-h-[60px] text-xs font-mono"
+                        placeholder='{"model": "gpt-4o"}'
+                      />
+                    </Field>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={addFallbackEntry}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              Add fallback adapter
+            </Button>
           </div>
         </div>
       )}

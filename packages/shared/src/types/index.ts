@@ -77,6 +77,7 @@ export type {
   AgentModelProfileConfig,
   AgentPermissions,
   AgentRuntimeConfig,
+  FallbackChainEntry,
   AgentInstructionsBundleMode,
   AgentInstructionsFileSummary,
   AgentInstructionsFileDetail,

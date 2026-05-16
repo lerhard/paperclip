@@ -17,6 +17,7 @@ export interface AgentConfigOverlay {
   heartbeat: Record<string, unknown>;
   runtime: Record<string, unknown>;
   modelProfiles?: { cheap?: AgentModelProfileOverlay };
+  fallbackChain?: { adapterType: string; adapterConfig?: Record<string, unknown> }[] | null;
 }
 
 const ADAPTER_AGNOSTIC_KEYS = [
@@ -104,6 +105,14 @@ export function buildAgentUpdatePatch(agent: Agent, overlay: AgentConfigOverlay)
         delete nextRuntimeConfig.modelProfiles;
       } else {
         nextRuntimeConfig.modelProfiles = nextProfiles;
+      }
+    }
+
+    if (overlay.fallbackChain !== undefined) {
+      if (overlay.fallbackChain === null || overlay.fallbackChain.length === 0) {
+        delete nextRuntimeConfig.fallbackChain;
+      } else {
+        nextRuntimeConfig.fallbackChain = overlay.fallbackChain;
       }
     }
 
