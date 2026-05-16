@@ -20,8 +20,14 @@ export interface AgentModelProfileConfig {
   adapterConfig: Record<string, unknown>;
 }
 
+export interface FallbackChainEntry {
+  adapterType: string;
+  adapterConfig?: Record<string, unknown>;
+}
+
 export interface AgentRuntimeConfig extends Record<string, unknown> {
   modelProfiles?: Partial<Record<ModelProfileKey, AgentModelProfileConfig>>;
+  fallbackChain?: FallbackChainEntry[];
 }
 
 export type AgentInstructionsBundleMode = "managed" | "external";

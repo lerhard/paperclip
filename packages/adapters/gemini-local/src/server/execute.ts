@@ -167,8 +167,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
   const command = asString(config.command, "gemini");
-  const model = asString(config.model, DEFAULT_GEMINI_LOCAL_MODEL).trim();
+  let model = asString(config.model, DEFAULT_GEMINI_LOCAL_MODEL).trim();
   const sandbox = asBoolean(config.sandbox, false);
+
+  // Defensive: if model looks like it belongs to another adapter, reset to default.
+  // This can happen when switching adapters without updating the model field.
+  const looksLikeGeminiModel = model === "auto" || model.startsWith("gemini-");
+  if (!looksLikeGeminiModel) {
+    await onLog(
+      "stderr",
+      `[paperclip] Gemini: model "${model}" does not look like a Gemini model (probably left over from a previous adapter). Resetting to "${DEFAULT_GEMINI_LOCAL_MODEL}".\n`,
+    );
+    model = DEFAULT_GEMINI_LOCAL_MODEL;
+  }
 
   const workspaceContext = parseObject(context.paperclipWorkspace);
   const workspaceCwd = asString(workspaceContext.cwd, "");

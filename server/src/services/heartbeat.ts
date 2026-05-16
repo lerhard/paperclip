@@ -7622,65 +7622,120 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           );
         }
       }
-      const onAdapterMeta = async (meta: AdapterInvocationMeta) => {
-        if (meta.env && secretKeys.size > 0) {
-          for (const key of secretKeys) {
-            if (key in meta.env) meta.env[key] = "***REDACTED***";
+      const fallbackChainRaw = (agent.runtimeConfig as Record<string, unknown> | undefined)?.fallbackChain;
+      const fallbackChain = Array.isArray(fallbackChainRaw)
+        ? fallbackChainRaw.filter(
+            (entry): entry is { adapterType: string; adapterConfig?: Record<string, unknown> } => {
+              if (typeof entry !== "object" || entry === null) return false;
+              const adapterType = (entry as Record<string, unknown>).adapterType;
+              return typeof adapterType === "string" && adapterType.length > 0;
+            },
+          )
+        : [];
+
+      async function tryAdapterExecute(
+        adapterType: string,
+        adapterConfig: Record<string, unknown>,
+      ): Promise<{ result: AdapterExecutionResult; usedAdapterType: string }> {
+        const tryAdapter = getServerAdapter(adapterType);
+        const tryAuthToken = tryAdapter.supportsLocalAgentJwt
+          ? createLocalAgentJwt(agent.id, agent.companyId, adapterType, run.id)
+          : null;
+        const tryRuntimeConfig = {
+          ...runtimeConfig,
+          ...adapterConfig,
+        };
+        await onLog(
+          "stdout",
+          `[paperclip] Trying adapter: ${adapterType}\n`,
+        );
+        const tryOnMeta = async (meta: AdapterInvocationMeta) => {
+          const metaWithAdapter = {
+            ...meta,
+            adapterType,
+            fallbackFrom: adapterType !== agent.adapterType ? agent.adapterType : undefined,
+          };
+          if (metaWithAdapter.env && secretKeys.size > 0) {
+            for (const key of secretKeys) {
+              if (key in metaWithAdapter.env) metaWithAdapter.env[key] = "***REDACTED***";
+            }
+          }
+          const modelProfileMetadata = modelProfileRunMetadata(modelProfileApplication);
+          await appendRunEvent(currentRun, seq++, {
+            eventType: "adapter.invoke",
+            stream: "system",
+            level: "info",
+            message: "adapter invocation",
+            payload: {
+              ...(metaWithAdapter as unknown as Record<string, unknown>),
+              ...(modelProfileMetadata ? { modelProfile: modelProfileMetadata } : {}),
+            },
+          });
+        };
+        const result = await tryAdapter.execute({
+          runId: run.id,
+          agent,
+          runtime: runtimeForAdapter,
+          config: tryRuntimeConfig,
+          context,
+          runtimeCommandSpec: tryAdapter.getRuntimeCommandSpec?.(tryRuntimeConfig) ?? null,
+          executionTarget,
+          executionTransport: remoteExecution
+            ? { remoteExecution: remoteExecution as unknown as Record<string, unknown> }
+            : undefined,
+          onLog,
+          onMeta: tryOnMeta,
+          onSpawn: async (meta) => {
+            await persistRunProcessMetadata(run.id, {
+              pid: meta.pid,
+              processGroupId:
+                "processGroupId" in meta && typeof meta.processGroupId === "number"
+                  ? meta.processGroupId
+                  : null,
+              startedAt: meta.startedAt,
+            });
+          },
+          authToken: tryAuthToken ?? undefined,
+        });
+        return { result, usedAdapterType: adapterType };
+      }
+
+      let adapterResult: AdapterExecutionResult = {} as AdapterExecutionResult;
+      let usedAdapterType = agent.adapterType;
+      try {
+        const primary = await tryAdapterExecute(agent.adapterType, {});
+        adapterResult = primary.result;
+        usedAdapterType = primary.usedAdapterType;
+      } catch (primaryErr) {
+        let lastErr = primaryErr;
+        let fallbackSuccess = false;
+        for (const fallback of fallbackChain) {
+          try {
+            const fallbackRes = await tryAdapterExecute(
+              fallback.adapterType,
+              fallback.adapterConfig ?? {},
+            );
+            adapterResult = fallbackRes.result;
+            usedAdapterType = fallbackRes.usedAdapterType;
+            fallbackSuccess = true;
+            await onLog(
+              "stdout",
+              `[paperclip] Fallback adapter ${fallback.adapterType} succeeded after ${agent.adapterType} failed.\n`,
+            );
+            break;
+          } catch (fallbackErr) {
+            lastErr = fallbackErr;
+            await onLog(
+              "stderr",
+              `[paperclip] Fallback adapter ${fallback.adapterType} also failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}\n`,
+            );
           }
         }
-        const modelProfileMetadata = modelProfileRunMetadata(modelProfileApplication);
-        await appendRunEvent(currentRun, seq++, {
-          eventType: "adapter.invoke",
-          stream: "system",
-          level: "info",
-          message: "adapter invocation",
-          payload: {
-            ...(meta as unknown as Record<string, unknown>),
-            ...(modelProfileMetadata ? { modelProfile: modelProfileMetadata } : {}),
-          },
-        });
-      };
-
-      const adapter = getServerAdapter(agent.adapterType);
-      const authToken = adapter.supportsLocalAgentJwt
-        ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
-        : null;
-      if (adapter.supportsLocalAgentJwt && !authToken) {
-        logger.warn(
-          {
-            companyId: agent.companyId,
-            agentId: agent.id,
-            runId: run.id,
-            adapterType: agent.adapterType,
-          },
-          "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
-        );
+        if (!fallbackSuccess) {
+          throw lastErr;
+        }
       }
-      const adapterResult = await adapter.execute({
-        runId: run.id,
-        agent,
-        runtime: runtimeForAdapter,
-        config: runtimeConfig,
-        context,
-        runtimeCommandSpec: adapter.getRuntimeCommandSpec?.(runtimeConfig) ?? null,
-        executionTarget,
-        executionTransport: remoteExecution
-          ? { remoteExecution: remoteExecution as unknown as Record<string, unknown> }
-          : undefined,
-        onLog,
-        onMeta: onAdapterMeta,
-        onSpawn: async (meta) => {
-          await persistRunProcessMetadata(run.id, {
-            pid: meta.pid,
-            processGroupId:
-              "processGroupId" in meta && typeof meta.processGroupId === "number"
-                ? meta.processGroupId
-                : null,
-            startedAt: meta.startedAt,
-          });
-        },
-        authToken: authToken ?? undefined,
-      });
+
       const adapterManagedRuntimeServices = adapterResult.runtimeServices
         ? await persistAdapterManagedRuntimeServices({
             db,
