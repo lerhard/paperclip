@@ -110,17 +110,8 @@ export function resolvePaperclipInstanceRootForAdapter(input: {
   return path.resolve(homeDir, "instances", instanceId);
 }
 
-export const DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE = [
-  "Agent {{agent.id}} ({{agent.name}}). Paperclip mode: act, don't describe.",
-  "",
-  "Exec rules:",
-  "- Act now; no plans unless asked.",
-  "- End heartbeat with status: done|in_review|blocked|in_progress.",
-  "- Use child issues for delegation; no polling.",
-  "- Blocked? Mark blocked + unblock owner/action.",
-  "- Use POST /api/issues/{id}/interactions for user input.",
-  "- Respect budget, gates, company boundaries.",
-].join("\n");
+export const DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE =
+  "Agent {{agent.id}} ({{agent.name}}). Exec rules: act now; end status=done|in_review|blocked|in_progress; delegate via child issues; blocked→mark+unblock; use POST /api/issues/{id}/interactions for input; respect budget/gates/company.";
 
 export interface PaperclipSkillEntry {
   key: string;

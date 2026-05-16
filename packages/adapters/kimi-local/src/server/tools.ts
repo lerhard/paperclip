@@ -17,11 +17,14 @@ export interface Tool {
   execute: (args: Record<string, unknown>) => Promise<ToolExecutionResult>;
 }
 
+const MAX_RESULT_CHARS = 8000;
+
 function ok(content: string | Record<string, unknown>): ToolExecutionResult {
-  return {
-    content: typeof content === "string" ? content : JSON.stringify(content),
-    isError: false,
-  };
+  let text = typeof content === "string" ? content : JSON.stringify(content);
+  if (text.length > MAX_RESULT_CHARS) {
+    text = text.slice(0, MAX_RESULT_CHARS) + `\n...[truncated ${text.length - MAX_RESULT_CHARS} chars]`;
+  }
+  return { content: text, isError: false };
 }
 
 function fail(message: string, detail?: unknown): ToolExecutionResult {
@@ -64,13 +67,13 @@ function runShellTool(): Tool {
       type: "function",
       function: {
         name: "run_shell_command",
-        description: "Run a shell command. Use for file ops, git, builds, tests.",
+        description: "Run shell command.",
         parameters: {
           type: "object",
           properties: {
-            command: { type: "string", description: "Shell command to run" },
-            cwd: { type: "string", description: "Working dir (optional)" },
-            timeout: { type: "number", description: "Timeout ms (optional, default 30000)" },
+            command: { type: "string" },
+            cwd: { type: "string" },
+            timeout: { type: "number" },
           },
           required: ["command"],
         },
@@ -98,13 +101,13 @@ function readFileTool(): Tool {
       type: "function",
       function: {
         name: "read_file",
-        description: "Read file contents.",
+        description: "Read file.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Absolute or relative file path" },
-            offset: { type: "number", description: "Start line (1-based, optional)" },
-            limit: { type: "number", description: "Max lines to read (optional)" },
+            path: { type: "string" },
+            offset: { type: "number" },
+            limit: { type: "number" },
           },
           required: ["path"],
         },
@@ -139,12 +142,12 @@ function writeFileTool(): Tool {
       type: "function",
       function: {
         name: "write_file",
-        description: "Write or overwrite a file.",
+        description: "Write file.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Absolute or relative file path" },
-            content: { type: "string", description: "File content" },
+            path: { type: "string" },
+            content: { type: "string" },
           },
           required: ["path", "content"],
         },
@@ -172,13 +175,13 @@ function searchFilesTool(): Tool {
       type: "function",
       function: {
         name: "search_files",
-        description: "Search file contents with grep/ripgrep.",
+        description: "Search files.",
         parameters: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Search regex or string" },
-            path: { type: "string", description: "Directory or file to search (optional)" },
-            glob: { type: "string", description: "File glob filter (optional, e.g. '*.ts')" },
+            query: { type: "string" },
+            path: { type: "string" },
+            glob: { type: "string" },
           },
           required: ["query"],
         },
@@ -225,14 +228,11 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "paperclip_api",
-        description: "Call Paperclip API. Methods: get_issue, update_issue_status, add_comment, list_child_issues.",
+        description: "Paperclip API.",
         parameters: {
           type: "object",
           properties: {
-            action: {
-              type: "string",
-              enum: ["get_issue", "update_issue_status", "add_comment", "list_child_issues"],
-            },
+            action: { type: "string", enum: ["get_issue", "update_issue_status", "add_comment", "list_child_issues"] },
             issue_id: { type: "string" },
             status: { type: "string", enum: ["in_progress", "done", "blocked", "in_review"] },
             comment: { type: "string" },

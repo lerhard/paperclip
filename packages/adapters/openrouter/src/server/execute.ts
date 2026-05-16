@@ -88,8 +88,7 @@ interface ChatCompletionResponse {
 // ----- helpers -----
 
 const DEFAULT_MAX_TURNS = 25;
-const DEFAULT_SYSTEM_PROMPT =
-  "Paperclip AI agent. EXECUTE using tools. No descriptions — only actions. End with update_issue_status=done + summary comment.";
+const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done + summary.";
 
 /**
  * Collect all available OpenRouter API keys into a round-robin pool.

@@ -39,8 +39,7 @@ interface ChatCompletionResponse {
   };
 }
 
-const DEFAULT_SYSTEM_PROMPT =
-  "Paperclip AI agent. EXECUTE tasks using tools. No descriptions — only actions. End with update_issue_status=done.";
+const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done.";
 
 function resolveApiKey(config: DeepSeekConfig): string {
   const key = config.apiKey || process.env.DEEPSEEK_API_KEY || "";
@@ -115,7 +114,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       body.ephemeral = true;
     }
 
-    await onLog("stdout", `[paperclip] DeepSeek turn ${turnCount}: ${messages.length} messages\n`);
+    await onLog("stdout", `[DS] t${turnCount}\n`);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
@@ -176,11 +175,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (!message?.tool_calls || message.tool_calls.length === 0) {
       const assistantContent = message?.content || "";
       const reasoningContent = (message as Record<string, unknown> | undefined)?.reasoning_content as string | undefined;
-      const summary = reasoningContent
-        ? `[Reasoning]\n${reasoningContent}\n\n[Answer]\n${assistantContent}`
-        : assistantContent;
+      const summary = reasoningContent ? `${reasoningContent}\n${assistantContent}` : assistantContent;
 
-      await onLog("stdout", `[paperclip] DeepSeek done. Turns: ${turnCount}\n`);
+      await onLog("stdout", `[DS] done ${turnCount}t\n`);
 
       return {
         exitCode: 0,
@@ -228,7 +225,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         continue;
       }
 
-      await onLog("stdout", `[paperclip] Tool call: ${toolCall.function.name}\n`);
+      await onLog("stdout", `[>] ${toolCall.function.name}\n`);
       const result = await tool.execute(args);
       messages.push({
         role: "tool",

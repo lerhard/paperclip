@@ -38,8 +38,7 @@ interface ChatCompletionResponse {
   };
 }
 
-const DEFAULT_SYSTEM_PROMPT =
-  "Paperclip AI agent. EXECUTE tasks using tools. No descriptions — only actions. End with update_issue_status=done.";
+const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done.";
 
 function resolveApiKey(config: KimiConfig): string {
   const key = config.apiKey || process.env.MOONSHOT_API_KEY || "";
@@ -110,7 +109,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       tools: buildToolSchemas(tools),
     };
 
-    await onLog("stdout", `[paperclip] Kimi turn ${turnCount}: ${messages.length} messages\n`);
+    await onLog("stdout", `[K] t${turnCount}\n`);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
@@ -171,7 +170,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (!message?.tool_calls || message.tool_calls.length === 0) {
       const summary = message?.content || "";
 
-      await onLog("stdout", `[paperclip] Kimi done. Turns: ${turnCount}\n`);
+      await onLog("stdout", `[K] done ${turnCount}t\n`);
 
       return {
         exitCode: 0,
@@ -219,7 +218,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         continue;
       }
 
-      await onLog("stdout", `[paperclip] Tool call: ${toolCall.function.name}\n`);
+      await onLog("stdout", `[>] ${toolCall.function.name}\n`);
       const result = await tool.execute(args);
       messages.push({
         role: "tool",
