@@ -508,7 +508,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       args.push("--sandbox=none");
     }
     if (extraArgs.length > 0) args.push(...extraArgs);
-    args.push("--prompt", cliPrompt);
+    args.push(`--prompt=${cliPrompt}`);
     return args;
   };
 
