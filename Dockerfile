@@ -71,7 +71,7 @@ RUN pnpm prune --prod \
   && find /app -type d \( -name '.turbo' -o -name '.vite' -o -name 'tsconfig.tsbuildinfo' \) -exec rm -rf {} + 2>/dev/null || true \
   && rm -rf /app/**/node_modules/.cache /app/**/node_modules/.pnpm /app/**/node_modules/.modules.yaml
 
-# Install .NET SDK 8 + 9, Java (JDK 17 + JRE 21), and lightweight developer utilities
+# Install .NET SDK 8 + 9, Java JDK 17 (includes JRE), and lightweight developer utilities
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl wget gnupg \
   && wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-archive-keyring.gpg \
@@ -81,7 +81,6 @@ RUN apt-get update \
     dotnet-sdk-8.0 \
     dotnet-sdk-9.0 \
     openjdk-17-jdk \
-    openjdk-21-jre-headless \
     openssh-client \
     jq \
     build-essential \
