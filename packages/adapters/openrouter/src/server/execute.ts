@@ -87,8 +87,13 @@ interface ChatCompletionResponse {
 
 // ----- helpers -----
 
-const DEFAULT_MAX_TURNS = 25;
+const DEFAULT_MAX_TURNS = 12;
 const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done + summary.";
+const FREE_TIER_TURN_DELAY_MS = 1500; // proactive delay to avoid rate limits
+
+function isFreeTierModel(model: string): boolean {
+  return model.endsWith(":free") || model === "openrouter/auto";
+}
 
 /**
  * Collect all available OpenRouter API keys into a round-robin pool.
@@ -236,10 +241,12 @@ async function callOpenRouter(
   tools: Tool[],
   onLog?: OnLog,
 ): Promise<{ response: ChatCompletionResponse; usedKey: string; rateLimit: RateLimitStatus }> {
+  const resolvedModel = config.model || "openrouter/auto";
+  const isFree = isFreeTierModel(resolvedModel);
   const body: Record<string, unknown> = {
-    model: config.model || "openrouter/auto",
+    model: resolvedModel,
     messages,
-    max_tokens: config.maxTokens ?? 4096,
+    max_tokens: config.maxTokens ?? (isFree ? 2048 : 4096),
     temperature: config.temperature ?? 0.7,
     top_p: config.topP ?? 1,
     stream: false,
@@ -610,9 +617,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Track per-key usage across the entire run
   const keyUsage = new Map<string, { requests: number; rateLimit: RateLimitStatus }>();
 
+  // Tool result cache: avoid re-executing same tool with same args across turns
+  const toolResultCache = new Map<string, { content: string; isError: boolean }>();
+
   try {
     while (turn < maxTurns) {
       turn += 1;
+
+      // Proactive delay for free tier: respect rate limits before hitting them
+      if (turn > 1 && isFreeTierModel(model)) {
+        await sleep(FREE_TIER_TURN_DELAY_MS);
+      }
 
       // Truncate message history if maxContextMessages is set (token optimization)
       let messagesToSend = messages;
@@ -716,7 +731,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         const tool = findTool(tools, toolName);
         let resultContent: string;
         let isError: boolean;
-        if (!tool) {
+        const cacheKey = `${toolName}::${JSON.stringify(args)}`;
+        const cached = toolResultCache.get(cacheKey);
+        if (cached) {
+          resultContent = cached.content;
+          isError = cached.isError;
+          await emitSystem(onLog, `Cache hit: ${toolName} (skipped re-execution)`);
+        } else if (!tool) {
           resultContent = JSON.stringify({ error: `Unknown tool: ${toolName}` });
           isError = true;
         } else {
@@ -724,6 +745,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             const out = await tool.execute(args);
             resultContent = out.content;
             isError = out.isError;
+            toolResultCache.set(cacheKey, { content: resultContent, isError });
           } catch (err) {
             resultContent = JSON.stringify({
               error: err instanceof Error ? err.message : String(err),
