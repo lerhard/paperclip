@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS "company_secret_provider_configs" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"id" uuid PRIMARY KEY NOT NULL,
 	"company_id" uuid NOT NULL,
 	"provider" text NOT NULL,
 	"display_name" text NOT NULL,

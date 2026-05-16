@@ -5,7 +5,7 @@ import { companySecrets } from "./company_secrets.js";
 export const companySecretBindings = pgTable(
   "company_secret_bindings",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     secretId: uuid("secret_id").notNull().references(() => companySecrets.id, { onDelete: "cascade" }),
     targetType: text("target_type").notNull(),

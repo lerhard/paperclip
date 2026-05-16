@@ -8,7 +8,7 @@ import { plugins } from "./plugins.js";
 export const secretAccessEvents = pgTable(
   "secret_access_events",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     secretId: uuid("secret_id").notNull().references(() => companySecrets.id, { onDelete: "cascade" }),
     version: integer("version"),

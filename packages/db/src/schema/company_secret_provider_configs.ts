@@ -6,7 +6,7 @@ import { agents } from "./agents.js";
 export const companySecretProviderConfigs = pgTable(
   "company_secret_provider_configs",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
     displayName: text("display_name").notNull(),

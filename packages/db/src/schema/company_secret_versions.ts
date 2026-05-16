@@ -5,7 +5,7 @@ import { companySecrets } from "./company_secrets.js";
 export const companySecretVersions = pgTable(
   "company_secret_versions",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     secretId: uuid("secret_id").notNull().references(() => companySecrets.id, { onDelete: "cascade" }),
     version: integer("version").notNull(),
     material: jsonb("material").$type<Record<string, unknown>>().notNull(),

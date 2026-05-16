@@ -6,7 +6,7 @@ import { companySecretProviderConfigs } from "./company_secret_provider_configs.
 export const companySecrets = pgTable(
   "company_secrets",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     key: text("key").notNull(),
     name: text("name").notNull(),
