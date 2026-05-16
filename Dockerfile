@@ -73,7 +73,7 @@ RUN pnpm prune --prod \
 
 # Install .NET SDK 8 + 9, Java (JDK 17 + JRE 21), and lightweight developer utilities
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl wget \
+  && apt-get install -y --no-install-recommends ca-certificates curl wget gnupg \
   && wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-archive-keyring.gpg \
   && echo "deb [signed-by=/usr/share/keyrings/microsoft-archive-keyring.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/microsoft-prod.list \
   && apt-get update \
