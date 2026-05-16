@@ -97,7 +97,7 @@ RUN apt-get update \
   && mkdir -p /paperclip \
   && chown node:node /paperclip
 
-RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai \
+RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli \
   && npm cache clean --force \
   && rm -rf /root/.npm/_cacache /usr/local/lib/node_modules/.cache
 
