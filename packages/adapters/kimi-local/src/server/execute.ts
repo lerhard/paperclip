@@ -39,6 +39,13 @@ interface ChatCompletionResponse {
 }
 
 const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done.";
+const TURN_DELAY_MS = 1200; // proactive delay to respect rate limits
+const DEFAULT_MAX_TURNS = 8;
+const DEFAULT_MAX_CONTEXT = 10;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function resolveApiKey(config: KimiConfig): string {
   const key = config.apiKey || process.env.MOONSHOT_API_KEY || "";
@@ -69,7 +76,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const maxTokens = asNumber(kimiConfig.maxTokens, 2048);
   const systemPrompt = asString(kimiConfig.systemPrompt, DEFAULT_SYSTEM_PROMPT);
   const timeoutSec = asNumber(kimiConfig.timeoutSec, 120);
-  const maxTurns = asNumber((config as any).maxTurns, 10);
+  const maxTurns = asNumber((config as any).maxTurns, DEFAULT_MAX_TURNS);
+  const maxContextMessages = asNumber((config as any).maxContextMessages, DEFAULT_MAX_CONTEXT);
 
   const apiBaseUrl = process.env.PAPERCLIP_API_URL || "http://localhost:3100";
   const currentIssueId =
@@ -98,12 +106,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let turnCount = 0;
+  const toolResultCache = new Map<string, { content: string; isError: boolean }>();
 
   while (turnCount < maxTurns) {
     turnCount++;
+
+    if (turnCount > 1) {
+      await sleep(TURN_DELAY_MS);
+    }
+
+    // Truncate message history to keep token count bounded
+    let messagesToSend = messages;
+    if (messages.length > maxContextMessages + 1) {
+      const systemMsg = messages[0];
+      const recent = messages.slice(-maxContextMessages);
+      messagesToSend = [systemMsg, ...recent];
+    }
+
     const body: Record<string, unknown> = {
       model,
-      messages,
+      messages: messagesToSend,
       temperature,
       max_tokens: maxTokens,
       tools: buildToolSchemas(tools),
@@ -196,15 +218,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     // Execute tool calls
     for (const toolCall of message.tool_calls) {
-      const tool = findTool(tools, toolCall.function.name);
-      if (!tool) {
-        messages.push({
-          role: "tool",
-          content: JSON.stringify({ error: `Unknown tool: ${toolCall.function.name}` }),
-          tool_call_id: toolCall.id,
-        });
-        continue;
-      }
+      const toolName = toolCall.function.name;
+      const tool = findTool(tools, toolName);
 
       let args: Record<string, unknown>;
       try {
@@ -218,13 +233,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         continue;
       }
 
-      await onLog("stdout", `[>] ${toolCall.function.name}\n`);
+      const cacheKey = `${toolName}::${JSON.stringify(args)}`;
+      const cached = toolResultCache.get(cacheKey);
+      if (cached) {
+        messages.push({
+          role: "tool",
+          content: cached.content,
+          tool_call_id: toolCall.id,
+        });
+        continue;
+      }
+
+      if (!tool) {
+        const errContent = JSON.stringify({ error: `Unknown tool: ${toolName}` });
+        messages.push({
+          role: "tool",
+          content: errContent,
+          tool_call_id: toolCall.id,
+        });
+        toolResultCache.set(cacheKey, { content: errContent, isError: true });
+        continue;
+      }
+
+      await onLog("stdout", `[>] ${toolName}\n`);
       const result = await tool.execute(args);
       messages.push({
         role: "tool",
         content: result.content,
         tool_call_id: toolCall.id,
       });
+      toolResultCache.set(cacheKey, { content: result.content, isError: result.isError });
     }
   }
 

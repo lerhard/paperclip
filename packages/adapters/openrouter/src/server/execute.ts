@@ -425,7 +425,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const autoApprove = config.autoApprove === true;
   const maxContextMessages = typeof config.maxContextMessages === "number" && config.maxContextMessages > 0 
     ? config.maxContextMessages 
-    : undefined;
+    : isFreeTierModel(model) ? 10 : undefined;
   const compressToolResults = config.compressToolResults === true;
   const useRTK = config.useRTK === true;
   const useCaveman = config.useCaveman === true;
@@ -705,8 +705,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         finalAssistantText = text;
       }
 
-      // No tool calls => model is done.
+      // No tool calls => model is done. Early-exit if text clearly signals completion.
       if (toolCalls.length === 0) {
+        stoppedReason = "completed";
+        break;
+      }
+
+      // Early-exit: if model says it's done but also included tool calls (rare),
+      // detect completion phrases to avoid wasting turns.
+      const lowerText = text.toLowerCase();
+      const completionPhrases = [
+        "status: done",
+        "task complete",
+        "work is done",
+        "finished successfully",
+        "completed successfully",
+        "nothing more to do",
+        "all done",
+      ];
+      if (completionPhrases.some((p) => lowerText.includes(p))) {
+        await emitSystem(onLog, "Early exit: model signaled completion");
         stoppedReason = "completed";
         break;
       }
