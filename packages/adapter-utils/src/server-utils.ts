@@ -111,22 +111,15 @@ export function resolvePaperclipInstanceRootForAdapter(input: {
 }
 
 export const DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE = [
-  "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
+  "Agent {{agent.id}} ({{agent.name}}). Paperclip mode: act, don't describe.",
   "",
-  "Execution contract:",
-  "- Start actionable work in this heartbeat; do not stop at a plan unless the issue asks for planning.",
-  "- Leave durable progress in comments, documents, or work products, then update the issue to a clear final disposition before ending the heartbeat.",
-  "- Comments, documents, screenshots, work products, and `Remaining` bullets are evidence, not valid liveness paths by themselves.",
-  "- Final disposition checklist: mark `done` when complete; use `in_review` only with a real reviewer, approval, interaction, or monitor path; use `blocked` only with first-class blockers or a named unblock owner/action; create delegated follow-up issues with blockers when another agent owns the next step; keep `in_progress` only when a live continuation path exists.",
-  "- Prefer the smallest verification that proves the change; do not default to full workspace typecheck/build/test on every heartbeat unless the task scope warrants it.",
-  "- Use child issues for parallel or long delegated work instead of polling agents, sessions, or processes.",
-  "- If woken by a human comment on a dependency-blocked issue, respond or triage the comment without treating the blocked deliverable work as unblocked.",
-  "- Create child issues directly when you know what needs to be done; use issue-thread interactions when the board/user must choose suggested tasks, answer structured questions, or confirm a proposal.",
-  "- To ask for that input, create an interaction on the current issue with POST /api/issues/{issueId}/interactions using kind suggest_tasks, ask_user_questions, or request_confirmation. Use continuationPolicy wake_assignee when you need to resume after a response; for request_confirmation this resumes only after acceptance.",
-  "- When you intentionally restart follow-up work on a completed assigned issue, include structured `resume: true` with the POST /api/issues/{issueId}/comments or PATCH /api/issues/{issueId} comment payload. Generic agent comments on closed issues are inert by default.",
-  "- For plan approval, update the plan document first, then create request_confirmation targeting the latest plan revision with idempotencyKey confirmation:{issueId}:plan:{revisionId}. Wait for acceptance before creating implementation subtasks, and create a fresh confirmation after superseding board/user comments if approval is still needed.",
-  "- If blocked, mark the issue blocked and name the unblock owner and action.",
-  "- Respect budget, pause/cancel, approval gates, and company boundaries.",
+  "Exec rules:",
+  "- Act now; no plans unless asked.",
+  "- End heartbeat with status: done|in_review|blocked|in_progress.",
+  "- Use child issues for delegation; no polling.",
+  "- Blocked? Mark blocked + unblock owner/action.",
+  "- Use POST /api/issues/{id}/interactions for user input.",
+  "- Respect budget, gates, company boundaries.",
 ].join("\n");
 
 export interface PaperclipSkillEntry {
@@ -647,205 +640,105 @@ export function renderPaperclipWakePrompt(
   };
 
   const lines = resumedSession
-      ? [
-        "## Paperclip Resume Delta",
-        "",
-        "You are resuming an existing Paperclip session.",
-        "This heartbeat is scoped to the issue below. Do not switch to another issue until you have handled this wake.",
-        "Focus on the new wake delta below and continue the current task without restating the full heartbeat boilerplate.",
-        "Fetch the API thread only when `fallbackFetchNeeded` is true or you need broader history than this batch.",
-        "",
-        "Execution contract: take concrete action in this heartbeat when the issue is actionable; do not stop at a plan unless planning was requested. Leave durable progress and then give the issue a clear final disposition before ending the heartbeat: `done`, `in_review` with a real reviewer/approval/interaction path, `blocked` with first-class blockers or a named unblock owner/action, delegated follow-up issues with blockers, or `in_progress` only when a live continuation path exists. Use child issues for long or parallel delegated work instead of polling. Comments, documents, screenshots, work products, and `Remaining` bullets are evidence, not valid liveness paths by themselves.",
-        "",
-        `- reason: ${normalized.reason ?? "unknown"}`,
-        `- issue: ${normalized.issue?.identifier ?? normalized.issue?.id ?? "unknown"}${normalized.issue?.title ? ` ${normalized.issue.title}` : ""}`,
-        `- pending comments: ${normalized.includedCount}/${normalized.requestedCount}`,
-        `- latest comment id: ${normalized.latestCommentId ?? "unknown"}`,
-        `- fallback fetch needed: ${normalized.fallbackFetchNeeded ? "yes" : "no"}`,
+    ? [
+        "WAKE (resume)",
+        `r:${normalized.reason ?? "?"} i:${normalized.issue?.identifier ?? normalized.issue?.id ?? "?"}`,
+        `cmts:${normalized.includedCount}/${normalized.requestedCount} latest:${normalized.latestCommentId ?? "?"} fetch:${normalized.fallbackFetchNeeded ? "y" : "n"}`,
       ]
     : [
-        "## Paperclip Wake Payload",
-        "",
-        "Treat this wake payload as the highest-priority change for the current heartbeat.",
-        "This heartbeat is scoped to the issue below. Do not switch to another issue until you have handled this wake.",
-        "Before generic repo exploration or boilerplate heartbeat updates, acknowledge the latest comment and explain how it changes your next action.",
-        "Use this inline wake data first before refetching the issue thread.",
-        "Only fetch the API thread when `fallbackFetchNeeded` is true or you need broader history than this batch.",
-        "",
-        "Execution contract: take concrete action in this heartbeat when the issue is actionable; do not stop at a plan unless planning was requested. Leave durable progress and then give the issue a clear final disposition before ending the heartbeat: `done`, `in_review` with a real reviewer/approval/interaction path, `blocked` with first-class blockers or a named unblock owner/action, delegated follow-up issues with blockers, or `in_progress` only when a live continuation path exists. Use child issues for long or parallel delegated work instead of polling. Comments, documents, screenshots, work products, and `Remaining` bullets are evidence, not valid liveness paths by themselves.",
-        "",
-        `- reason: ${normalized.reason ?? "unknown"}`,
-        `- issue: ${normalized.issue?.identifier ?? normalized.issue?.id ?? "unknown"}${normalized.issue?.title ? ` ${normalized.issue.title}` : ""}`,
-        `- pending comments: ${normalized.includedCount}/${normalized.requestedCount}`,
-        `- latest comment id: ${normalized.latestCommentId ?? "unknown"}`,
-        `- fallback fetch needed: ${normalized.fallbackFetchNeeded ? "yes" : "no"}`,
+        "WAKE",
+        `r:${normalized.reason ?? "?"} i:${normalized.issue?.identifier ?? normalized.issue?.id ?? "?"}`,
+        `cmts:${normalized.includedCount}/${normalized.requestedCount} latest:${normalized.latestCommentId ?? "?"} fetch:${normalized.fallbackFetchNeeded ? "y" : "n"}`,
       ];
 
-  if (normalized.issue?.status) {
-    lines.push(`- issue status: ${normalized.issue.status}`);
-  }
-  if (normalized.issue?.workMode) {
-    lines.push(`- issue work mode: ${normalized.issue.workMode}`);
-  }
-  if (normalized.issue?.priority) {
-    lines.push(`- issue priority: ${normalized.issue.priority}`);
-  }
+  if (normalized.issue?.status) lines.push(`s:${normalized.issue.status}`);
+  if (normalized.issue?.workMode) lines.push(`wm:${normalized.issue.workMode}`);
+  if (normalized.issue?.priority) lines.push(`p:${normalized.issue.priority}`);
   if (normalized.issue?.workMode === "planning") {
     const hasWakeComments = normalized.comments.length > 0;
     const acceptedPlanContinuation =
       !hasWakeComments &&
       normalized.interactionKind === "request_confirmation" && normalized.interactionStatus === "accepted";
-    let directive = "Make the plan only. Do not write code or perform implementation work.";
-    if (hasWakeComments) {
-      directive = "Update the plan only. Do not write code or perform implementation work.";
-    }
     if (acceptedPlanContinuation) {
-      directive = "Create child issues from the approved plan only. Do not write code or perform implementation work on the planning issue.";
-    }
-    lines.push(`- planning directive: ${directive}`);
-    if (acceptedPlanContinuation) {
-      lines.push(
-        "- accepted-plan continuation: you may create child implementation issues from the approved plan, but must not start implementation work on the planning issue itself",
-      );
+      lines.push("plan: create child issues from approved plan only");
+    } else {
+      lines.push(hasWakeComments ? "plan: update plan only" : "plan: make plan only");
     }
   }
-  if (normalized.checkedOutByHarness) {
-    lines.push("- checkout: already claimed by the harness for this run");
-  }
+  if (normalized.checkedOutByHarness) lines.push("co:yes");
   if (normalized.dependencyBlockedInteraction) {
-    lines.push("- dependency-blocked interaction: yes");
-    lines.push("- execution scope: respond or triage the human comment; do not treat blocker-dependent deliverable work as unblocked");
+    lines.push("dep-blocked");
     if (normalized.unresolvedBlockerSummaries.length > 0) {
       const blockers = normalized.unresolvedBlockerSummaries
-        .map((blocker) => `${blocker.identifier ?? blocker.id ?? "unknown"}${blocker.title ? ` ${blocker.title}` : ""}${blocker.status ? ` (${blocker.status})` : ""}`)
-        .join("; ");
-      lines.push(`- unresolved blockers: ${blockers}`);
+        .map((b) => `${b.identifier ?? b.id ?? "?"}${b.title ? `:${b.title}` : ""}${b.status ? `:${b.status}` : ""}`)
+        .join(";");
+      lines.push(`blockers:${blockers}`);
     } else if (normalized.unresolvedBlockerIssueIds.length > 0) {
-      lines.push(`- unresolved blocker issue ids: ${normalized.unresolvedBlockerIssueIds.join(", ")}`);
+      lines.push(`blockers:${normalized.unresolvedBlockerIssueIds.join(",")}`);
     }
   }
   if (normalized.treeHoldInteraction) {
-    lines.push("- tree-hold interaction: yes");
-    lines.push("- execution scope: respond or triage the human comment; the subtree remains paused until an explicit resume action");
+    lines.push("tree-hold");
     if (normalized.activeTreeHold) {
-      const hold = normalized.activeTreeHold;
-      lines.push(`- active tree hold: ${hold.holdId ?? "unknown"}${hold.rootIssueId ? ` rooted at ${hold.rootIssueId}` : ""}${hold.mode ? ` (${hold.mode})` : ""}`);
+      const h = normalized.activeTreeHold;
+      lines.push(`hold:${h.holdId ?? "?"}${h.rootIssueId ? `@${h.rootIssueId}` : ""}`);
     }
   }
-  if (normalized.missingCount > 0) {
-    lines.push(`- omitted comments: ${normalized.missingCount}`);
-  }
+  if (normalized.missingCount > 0) lines.push(`miss:${normalized.missingCount}`);
 
   if (executionStage) {
     lines.push(
-      `- execution wake role: ${executionStage.wakeRole ?? "unknown"}`,
-      `- execution stage: ${executionStage.stageType ?? "unknown"}`,
-      `- execution participant: ${principalLabel(executionStage.currentParticipant)}`,
-      `- execution return assignee: ${principalLabel(executionStage.returnAssignee)}`,
-      `- last decision outcome: ${executionStage.lastDecisionOutcome ?? "none"}`,
+      `role:${executionStage.wakeRole ?? "?"} stage:${executionStage.stageType ?? "?"}`,
+      `part:${principalLabel(executionStage.currentParticipant)} ret:${principalLabel(executionStage.returnAssignee)}`,
     );
     if (executionStage.allowedActions.length > 0) {
-      lines.push(`- allowed actions: ${executionStage.allowedActions.join(", ")}`);
+      lines.push(`act:${executionStage.allowedActions.join(",")}`);
     }
     if (executionStage.reviewRequest) {
-      lines.push(
-        "",
-        "Review request instructions:",
-        executionStage.reviewRequest.instructions,
-      );
+      lines.push(`review:${executionStage.reviewRequest.instructions}`);
     }
-    lines.push("");
     if (executionStage.wakeRole === "reviewer" || executionStage.wakeRole === "approver") {
-      lines.push(
-        `You are waking as the active ${executionStage.wakeRole} for this issue.`,
-        "Do not execute the task itself or continue executor work.",
-        "Review the issue and choose one of the allowed actions above.",
-        "If you request changes, the workflow routes back to the stored return assignee.",
-        "",
-      );
+      lines.push(`You are ${executionStage.wakeRole}. Review and choose an action.`);
     } else if (executionStage.wakeRole === "executor") {
-      lines.push(
-        "You are waking because changes were requested in the execution workflow.",
-        "Address the requested changes on this issue and resubmit when the work is ready.",
-        "",
-      );
+      lines.push("Address requested changes and resubmit.");
     }
   }
 
   if (normalized.continuationSummary) {
-    lines.push(
-      "",
-      "Issue continuation summary:",
-      normalized.continuationSummary.body,
-    );
-    if (normalized.continuationSummary.bodyTruncated) {
-      lines.push("[continuation summary truncated]");
-    }
+    lines.push(`cont:${normalized.continuationSummary.body}`);
+    if (normalized.continuationSummary.bodyTruncated) lines.push("[trunc]");
   }
 
   if (normalized.livenessContinuation) {
-    const continuation = normalized.livenessContinuation;
-    lines.push("", "Run liveness continuation:");
-    if (continuation.attempt) {
-      lines.push(
-        `- attempt: ${continuation.attempt}${continuation.maxAttempts ? `/${continuation.maxAttempts}` : ""}`,
-      );
-    }
-    if (continuation.sourceRunId) {
-      lines.push(`- source run: ${continuation.sourceRunId}`);
-    }
-    if (continuation.state) {
-      lines.push(`- liveness state: ${continuation.state}`);
-    }
-    if (continuation.reason) {
-      lines.push(`- reason: ${continuation.reason}`);
-    }
-    if (continuation.instruction) {
-      lines.push(`- instruction: ${continuation.instruction}`);
-    }
+    const c = normalized.livenessContinuation;
+    const parts: string[] = [];
+    if (c.attempt) parts.push(`try:${c.attempt}${c.maxAttempts ? `/${c.maxAttempts}` : ""}`);
+    if (c.sourceRunId) parts.push(`src:${c.sourceRunId}`);
+    if (c.state) parts.push(`st:${c.state}`);
+    if (c.reason) parts.push(`r:${c.reason}`);
+    if (c.instruction) parts.push(`i:${c.instruction}`);
+    if (parts.length > 0) lines.push(`live:${parts.join(" ")}`);
   }
 
   if (normalized.childIssueSummaries.length > 0) {
-    lines.push("", "Direct child issue summaries:");
     for (const child of normalized.childIssueSummaries) {
-      const label = child.identifier ?? child.id ?? "unknown";
-      lines.push(
-        `- ${label}${child.title ? ` ${child.title}` : ""}${child.status ? ` (${child.status})` : ""}`,
-      );
-      if (child.summary) {
-        lines.push(`  ${child.summary}`);
-      }
+      const label = child.identifier ?? child.id ?? "?";
+      lines.push(`child:${label}${child.title ? `:${child.title}` : ""}${child.status ? `:${child.status}` : ""}${child.summary ? `:${child.summary}` : ""}`);
     }
-    if (normalized.childIssueSummaryTruncated) {
-      lines.push("[child issue summaries truncated]");
-    }
+    if (normalized.childIssueSummaryTruncated) lines.push("[trunc]");
   }
 
   if (normalized.checkedOutByHarness) {
-    lines.push(
-      "",
-      "The harness already checked out this issue for the current run.",
-      "Do not call `/api/issues/{id}/checkout` again unless you intentionally switch to a different task.",
-      "",
-    );
+    lines.push("[co: don't checkout again]");
   }
 
-  if (normalized.comments.length > 0) {
-    lines.push("New comments in order:");
-  }
-
-  for (const [index, comment] of normalized.comments.entries()) {
-    const authorLabel = comment.authorId
-      ? `${comment.authorType ?? "unknown"} ${comment.authorId}`
-      : comment.authorType ?? "unknown";
-    lines.push(
-      `${index + 1}. comment ${comment.id ?? "unknown"} at ${comment.createdAt ?? "unknown"} by ${authorLabel}`,
-      comment.body,
-    );
-    if (comment.bodyTruncated) {
-      lines.push("[comment body truncated]");
-    }
-    lines.push("");
+  for (const comment of normalized.comments) {
+    const author = comment.authorId
+      ? `${comment.authorType ?? "?"}:${comment.authorId}`
+      : comment.authorType ?? "?";
+    lines.push(`cmt ${comment.id ?? "?"} ${author}`);
+    lines.push(comment.body);
+    if (comment.bodyTruncated) lines.push("[trunc]");
   }
 
   return lines.join("\n").trim();

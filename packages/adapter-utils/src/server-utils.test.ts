@@ -418,22 +418,11 @@ describe("runChildProcess", () => {
 
 describe("renderPaperclipWakePrompt", () => {
   it("keeps the default local-agent prompt action-oriented", () => {
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Start actionable work in this heartbeat");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("do not stop at a plan");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("clear final disposition");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("evidence, not valid liveness paths by themselves");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("keep `in_progress` only when a live continuation path exists");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Prefer the smallest verification that proves the change");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Use child issues");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("instead of polling agents, sessions, or processes");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Create child issues directly when you know what needs to be done");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("POST /api/issues/{issueId}/interactions");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("kind suggest_tasks, ask_user_questions, or request_confirmation");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("confirmation:{issueId}:plan:{revisionId}");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Wait for acceptance before creating implementation subtasks");
-    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain(
-      "Respect budget, pause/cancel, approval gates, and company boundaries",
-    );
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("act, don't describe");
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Act now");
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("done|in_review|blocked|in_progress");
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("child issues");
+    expect(DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE).toContain("Respect budget, gates, company boundaries");
   });
 
   it("adds the execution contract to scoped wake prompts", () => {
@@ -454,12 +443,11 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: false,
     });
 
-    expect(prompt).toContain("## Paperclip Wake Payload");
-    expect(prompt).toContain("Execution contract: take concrete action in this heartbeat");
-    expect(prompt).toContain("clear final disposition");
-    expect(prompt).toContain("evidence, not valid liveness paths by themselves");
-    expect(prompt).toContain("Use child issues for long or parallel delegated work instead of polling");
-    expect(prompt).toContain("named unblock owner/action");
+    expect(prompt).toContain("WAKE");
+    expect(prompt).toContain("r:issue_assigned");
+    expect(prompt).toContain("i:PAP-1580");
+    expect(prompt).toContain("cmts:0/0");
+    expect(prompt).toContain("fetch:n");
   });
 
   it("renders planning-mode directives for assignment and comment wakes", () => {
@@ -477,8 +465,8 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: false,
     });
 
-    expect(assignmentPrompt).toContain("- issue work mode: planning");
-    expect(assignmentPrompt).toContain("Make the plan only. Do not write code or perform implementation work.");
+    expect(assignmentPrompt).toContain("wm:planning");
+    expect(assignmentPrompt).toContain("plan: make plan only");
 
     const commentPrompt = renderPaperclipWakePrompt({
       reason: "issue_commented",
@@ -496,7 +484,8 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: false,
     });
 
-    expect(commentPrompt).toContain("Update the plan only. Do not write code or perform implementation work.");
+    expect(commentPrompt).toContain("wm:planning");
+    expect(commentPrompt).toContain("plan: update plan only");
   });
 
   it("does not render stale accepted-plan continuation guidance for later planning comment wakes", () => {
@@ -518,9 +507,8 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: false,
     });
 
-    expect(prompt).toContain("Update the plan only. Do not write code or perform implementation work.");
+    expect(prompt).toContain("plan: update plan only");
     expect(prompt).not.toContain("accepted-plan continuation");
-    expect(prompt).not.toContain("Create child issues from the approved plan only");
   });
 
   it("renders accepted-plan continuation guidance for planning issues", () => {
@@ -540,10 +528,7 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: false,
     });
 
-    expect(prompt).toContain("accepted-plan continuation");
-    expect(prompt).toContain("Create child issues from the approved plan only");
-    expect(prompt).toContain("may create child implementation issues");
-    expect(prompt).toContain("must not start implementation work on the planning issue itself");
+    expect(prompt).toContain("plan: create child issues from approved plan only");
   });
 
   it("keeps accepted-plan guidance when stale comment ids have no loaded comments", () => {
@@ -565,9 +550,8 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: true,
     });
 
-    expect(prompt).toContain("accepted-plan continuation");
-    expect(prompt).toContain("Create child issues from the approved plan only");
-    expect(prompt).not.toContain("Update the plan only");
+    expect(prompt).toContain("plan: create child issues from approved plan only");
+    expect(prompt).not.toContain("plan: update plan only");
   });
 
   it("renders dependency-blocked interaction guidance", () => {
@@ -601,9 +585,8 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: false,
     });
 
-    expect(prompt).toContain("dependency-blocked interaction: yes");
-    expect(prompt).toContain("respond or triage the human comment");
-    expect(prompt).toContain("PAP-1723 Finish blocker (todo)");
+    expect(prompt).toContain("dep-blocked");
+    expect(prompt).toContain("blockers:PAP-1723:Finish blocker:todo");
   });
 
   it("renders loose review request instructions for execution handoffs", () => {
@@ -629,9 +612,8 @@ describe("renderPaperclipWakePrompt", () => {
       fallbackFetchNeeded: false,
     });
 
-    expect(prompt).toContain("Review request instructions:");
-    expect(prompt).toContain("Please focus on edge cases and leave a short risk summary.");
-    expect(prompt).toContain("You are waking as the active reviewer for this issue.");
+    expect(prompt).toContain("review:Please focus on edge cases and leave a short risk summary.");
+    expect(prompt).toContain("You are reviewer. Review and choose an action.");
   });
 
   it("includes continuation and child issue summaries in structured wake context", () => {
@@ -690,17 +672,9 @@ describe("renderPaperclipWakePrompt", () => {
     });
 
     const prompt = renderPaperclipWakePrompt(payload);
-    expect(prompt).toContain("Issue continuation summary:");
-    expect(prompt).toContain("Integrate child outputs.");
-    expect(prompt).toContain("Run liveness continuation:");
-    expect(prompt).toContain("- attempt: 2/2");
-    expect(prompt).toContain("- source run: run-1");
-    expect(prompt).toContain("- liveness state: plan_only");
-    expect(prompt).toContain("- reason: Run described future work without concrete action evidence");
-    expect(prompt).toContain("- instruction: Take the first concrete action now.");
-    expect(prompt).toContain("Direct child issue summaries:");
-    expect(prompt).toContain("PAP-101 Implement helper (done)");
-    expect(prompt).toContain("Added the helper route and tests.");
+    expect(prompt).toContain("cont:# Continuation Summary\n\n## Next Action\n\n- Integrate child outputs.");
+    expect(prompt).toContain("live:try:2/2 src:run-1 st:plan_only r:Run described future work without concrete action evidence i:Take the first concrete action now.");
+    expect(prompt).toContain("child:PAP-101:Implement helper:done:Added the helper route and tests.");
   });
 });
 

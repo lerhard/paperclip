@@ -41,34 +41,22 @@ export const OPENROUTER_CHAT_ENDPOINT = `${OPENROUTER_BASE_URL}/chat/completions
 export const OPENROUTER_GENERATION_ENDPOINT = `${OPENROUTER_BASE_URL}/generation`;
 
 // ── Adapter documentation ───────────────────────────────────────
-export const agentConfigurationDoc = `# openrouter adapter configuration
+export const agentConfigurationDoc = `# openrouter config
 
-## Use when
-- You want access to 300+ models (free AND paid) from a single API key
-- You want to use OpenRouter's auto-routing for cost-optimized inference
-- You need models not available via native adapters (Llama, Qwen, Mistral, DeepSeek, etc.)
-- You want to compare outputs across multiple providers without separate API keys
+Use when: need 300+ models via single API key; auto-routing; models not in native adapters.
 
-## Core fields
-- \`model\` (string) — OpenRouter model ID, e.g. "anthropic/claude-sonnet-4-6"
-  Use "openrouter/auto" to let OpenRouter pick the best model automatically.
-  Append ":free" to any model ID for free-tier routing.
-- \`apiKey\` (string) — Your OpenRouter API key (sk-or-v1-...)
-  Can also be set via OPENROUTER_API_KEY env var.
-- \`systemPrompt\` (string, optional) — System prompt prepended to all messages.
-- \`temperature\` (number, optional) — Sampling temperature (0-2). Default: 0.7
-- \`maxTokens\` (number, optional) — Max completion tokens. Default: 4096
-- \`topP\` (number, optional) — Nucleus sampling. Default: 1
-- \`stream\` (boolean, optional) — Enable SSE streaming. Default: true
-- \`reasoning\` (boolean, optional) — Enable extended thinking for supported models.
-- \`transforms\` (string[], optional) — OpenRouter transforms, e.g. ["middle-out"]
-- \`route\` (string, optional) — "fallback" (default) or "no-fallback"
-- \`httpReferer\` (string, optional) — Your app URL for OpenRouter leaderboards
-- \`xTitle\` (string, optional) — Your app name for OpenRouter leaderboards
+Core fields:
+- model (string): e.g. "anthropic/claude-sonnet-4-6". Use "openrouter/auto" for auto-pick. Append ":free" for free tier.
+- apiKey (string): OpenRouter key. Also via OPENROUTER_API_KEY env var.
+- systemPrompt (string, optional)
+- temperature (number, optional): Default 0.7
+- maxTokens (number, optional): Default 2048 (token-optimized)
+- topP, stream, reasoning, transforms, route, httpReferer, xTitle (optional)
+- maxTurns (number, optional): Default 25
+- autoApprove (boolean, optional): Skip approval gates
+- compressToolResults, useRTK, useCaveman (boolean, optional): Enable token compression
 
-## Don't use when
-- You already have a direct API key for a single provider and only need that one model
-- You need local/offline inference (use ollama or process adapter instead)
+Don't use when: you have direct provider API key; need local/offline inference.
 `;
 
 // ── Types ───────────────────────────────────────────────────────

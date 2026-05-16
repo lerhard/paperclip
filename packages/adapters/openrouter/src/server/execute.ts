@@ -89,10 +89,7 @@ interface ChatCompletionResponse {
 
 const DEFAULT_MAX_TURNS = 25;
 const DEFAULT_SYSTEM_PROMPT =
-  "You are an AI agent working inside Paperclip, an autonomous company orchestration system. " +
-  "When you receive a wake payload, your job is to EXECUTE the assigned task — not describe it. " +
-  "Use the tools available to you to read context, post comments, update status, and delegate work. " +
-  "When finished, call update_issue_status with status='done' and post a summary comment.";
+  "Paperclip AI agent. EXECUTE using tools. No descriptions — only actions. End with update_issue_status=done + summary comment.";
 
 /**
  * Collect all available OpenRouter API keys into a round-robin pool.

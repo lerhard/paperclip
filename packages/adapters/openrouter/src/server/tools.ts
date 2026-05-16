@@ -83,15 +83,13 @@ function getIssueTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "get_issue",
-        description:
-          "Fetch the full details of an issue (title, description, status, comments, attachments). " +
-          "Defaults to the current issue if no id is supplied.",
+        description: "Fetch issue details. Defaults to current issue.",
         parameters: {
           type: "object",
           properties: {
             issue_id: {
               type: "string",
-              description: "Issue id. Omit to use the current issue.",
+              description: "Issue id. Omit for current.",
             },
           },
         },
@@ -111,18 +109,16 @@ function updateIssueStatusTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "update_issue_status",
-        description:
-          "Move an issue to a new status. Valid statuses: open, in_progress, blocked, done, cancelled. " +
-          "Defaults to the current issue.",
+        description: "Move issue to new status: open|in_progress|blocked|done|cancelled. Defaults to current.",
         parameters: {
           type: "object",
           properties: {
-            issue_id: { type: "string", description: "Issue id. Omit to use the current issue." },
+            issue_id: { type: "string", description: "Issue id. Omit for current." },
             status: {
               type: "string",
               enum: ["open", "in_progress", "blocked", "done", "cancelled"],
             },
-            reason: { type: "string", description: "Optional explanation." },
+            reason: { type: "string", description: "Optional reason." },
           },
           required: ["status"],
         },
@@ -146,14 +142,12 @@ function addCommentTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "add_comment",
-        description:
-          "Post a comment on an issue. Use this to share progress, results, or questions with " +
-          "other agents and humans. Defaults to the current issue.",
+        description: "Post a comment. Defaults to current issue.",
         parameters: {
           type: "object",
           properties: {
-            issue_id: { type: "string", description: "Issue id. Omit to use the current issue." },
-            body: { type: "string", description: "Comment body in Markdown." },
+            issue_id: { type: "string", description: "Issue id. Omit for current." },
+            body: { type: "string", description: "Comment body." },
           },
           required: ["body"],
         },
@@ -175,11 +169,11 @@ function listCommentsTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "list_comments",
-        description: "List all comments on an issue. Defaults to the current issue.",
+        description: "List issue comments. Defaults to current.",
         parameters: {
           type: "object",
           properties: {
-            issue_id: { type: "string", description: "Issue id. Omit to use the current issue." },
+            issue_id: { type: "string", description: "Issue id. Omit for current." },
           },
         },
       },
@@ -198,16 +192,14 @@ function createSubIssueTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "create_sub_issue",
-        description:
-          "Create a child issue under a parent (defaults to the current issue). Use this to break work " +
-          "into smaller pieces or delegate to a teammate by setting assigneeId.",
+        description: "Create child issue. Defaults to current parent.",
         parameters: {
           type: "object",
           properties: {
-            parent_issue_id: { type: "string", description: "Parent issue id. Omit to use current issue." },
+            parent_issue_id: { type: "string", description: "Parent issue id. Omit for current." },
             title: { type: "string" },
             description: { type: "string" },
-            assignee_agent_id: { type: "string", description: "Optional agent id to assign to." },
+            assignee_agent_id: { type: "string", description: "Optional agent id." },
             priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
           },
           required: ["title"],
@@ -236,13 +228,13 @@ function listIssuesTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "list_issues",
-        description: "List issues in the current company, optionally filtered by status or assignee.",
+        description: "List company issues. Filter by status or assignee.",
         parameters: {
           type: "object",
           properties: {
             status: { type: "string" },
             assignee_agent_id: { type: "string" },
-            limit: { type: "number", description: "Max results, default 20." },
+            limit: { type: "number", description: "Max results. Default 20." },
           },
         },
       },
@@ -263,22 +255,20 @@ function hireAgentTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "hire_agent",
-        description:
-          "Hire a new agent into the company. By default this creates an approval request that a human " +
-          "must approve before the agent is created. Use this when you need a new role on your team.",
+        description: "Hire new agent. Creates approval request by default.",
         parameters: {
           type: "object",
           properties: {
             name: { type: "string" },
-            role: { type: "string", description: "Job title, e.g. 'Senior Engineer'." },
-            mission: { type: "string", description: "What this agent is responsible for." },
+            role: { type: "string", description: "Job title." },
+            mission: { type: "string", description: "Agent mission." },
             adapter_type: {
               type: "string",
-              description: "Adapter to use, e.g. 'openrouter', 'claude_local'.",
+              description: "Adapter type.",
               default: "openrouter",
             },
-            model: { type: "string", description: "Model id, e.g. 'stepfun/step-3.5-flash:free'." },
-            reports_to_agent_id: { type: "string", description: "Manager agent id." },
+            model: { type: "string", description: "Model id." },
+            reports_to_agent_id: { type: "string", description: "Manager id." },
           },
           required: ["name", "role", "mission"],
         },
@@ -317,10 +307,7 @@ function listAgentsTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "list_agents",
-        description:
-          "List all agents (teammates) in the current company. Returns each agent's id, name, " +
-          "role, title, adapter type, model, and status. Use this BEFORE delegating work with " +
-          "create_sub_issue or hire_agent so you can reference real agent ids instead of guessing.",
+        description: "List company agents. Use before delegating work.",
         parameters: {
           type: "object",
           properties: {},
@@ -353,21 +340,17 @@ function requestApprovalTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "request_approval",
-        description:
-          "Open an approval request for an action that requires human sign-off. " +
-          "Only three types are currently supported by Paperclip: hire_agent, " +
-          "approve_ceo_strategy, budget_override_required. For hiring, prefer the " +
-          "dedicated hire_agent tool instead.",
+        description: "Request human approval. Types: hire_agent, approve_ceo_strategy, budget_override_required.",
         parameters: {
           type: "object",
           properties: {
             type: {
               type: "string",
               enum: ["hire_agent", "approve_ceo_strategy", "budget_override_required"],
-              description: "Approval type — must be one of the three supported values.",
+              description: "Approval type.",
             },
-            summary: { type: "string", description: "One-line summary for the operator." },
-            payload: { type: "object", description: "Structured payload describing the action." },
+            summary: { type: "string", description: "One-line summary." },
+            payload: { type: "object", description: "Action payload." },
           },
           required: ["type", "summary"],
         },
@@ -398,12 +381,12 @@ function executeCommandTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "execute_command",
-        description: "Execute a shell command and return its output. Use this for running build commands, git operations, package managers, etc.",
+        description: "Execute shell command.",
         parameters: {
           type: "object",
           properties: {
-            command: { type: "string", description: "The shell command to execute" },
-            cwd: { type: "string", description: "Working directory (optional, defaults to project root)" },
+            command: { type: "string", description: "Shell command" },
+            cwd: { type: "string", description: "Working dir. Default project root." },
           },
           required: ["command"],
         },
@@ -438,11 +421,11 @@ function readFileTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "read_file",
-        description: "Read the contents of a file. Returns the full file content as text.",
+        description: "Read file contents.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Absolute or relative path to the file" },
+            path: { type: "string", description: "File path" },
           },
           required: ["path"],
         },
@@ -469,12 +452,12 @@ function writeFileTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "write_file",
-        description: "Create or overwrite a file with the given content. Creates parent directories if needed.",
+        description: "Write file. Creates parent dirs if needed.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Absolute or relative path to the file" },
-            content: { type: "string", description: "Content to write to the file" },
+            path: { type: "string", description: "File path" },
+            content: { type: "string", description: "File content" },
           },
           required: ["path", "content"],
         },
@@ -510,11 +493,11 @@ function listDirectoryTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "list_directory",
-        description: "List files and directories in a given path. Returns names, types, and sizes.",
+        description: "List directory contents.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Absolute or relative path to the directory" },
+            path: { type: "string", description: "Directory path" },
           },
           required: ["path"],
         },
@@ -560,15 +543,15 @@ function grepSearchTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "grep_search",
-        description: "Search for a pattern in files using grep. Returns matching lines with file paths and line numbers. Essential for finding code before editing.",
+        description: "Grep search files for pattern.",
         parameters: {
           type: "object",
           properties: {
-            pattern: { type: "string", description: "Search pattern (supports regex)" },
-            path: { type: "string", description: "Directory or file to search in" },
-            file_pattern: { type: "string", description: "Optional file pattern to filter (e.g., '*.ts', '*.cs')" },
-            case_sensitive: { type: "boolean", description: "Case sensitive search (default: false)" },
-            max_results: { type: "number", description: "Maximum number of results (default: 100)" },
+            pattern: { type: "string", description: "Regex pattern" },
+            path: { type: "string", description: "Directory or file" },
+            file_pattern: { type: "string", description: "Optional filter e.g. '*.ts'" },
+            case_sensitive: { type: "boolean", description: "Case sensitive. Default false." },
+            max_results: { type: "number", description: "Max results. Default 100." },
           },
           required: ["pattern", "path"],
         },
@@ -646,13 +629,13 @@ function editFileTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "edit_file",
-        description: "Edit a file by replacing specific content. Safer than write_file for surgical changes. Finds old_content and replaces with new_content.",
+        description: "Edit file by replacing old_content with new_content.",
         parameters: {
           type: "object",
           properties: {
-            path: { type: "string", description: "Path to the file to edit" },
-            old_content: { type: "string", description: "Exact content to find and replace (must match exactly)" },
-            new_content: { type: "string", description: "New content to replace with" },
+            path: { type: "string", description: "File path" },
+            old_content: { type: "string", description: "Content to find" },
+            new_content: { type: "string", description: "Replacement content" },
           },
           required: ["path", "old_content", "new_content"],
         },
@@ -702,14 +685,14 @@ function webFetchTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "web_fetch",
-        description: "Fetch content from a URL. Useful for reading documentation, API responses, or web pages. Returns the response body as text.",
+        description: "Fetch URL content.",
         parameters: {
           type: "object",
           properties: {
-            url: { type: "string", description: "URL to fetch (must start with http:// or https://)" },
-            method: { type: "string", description: "HTTP method (default: GET)", enum: ["GET", "POST", "PUT", "DELETE"] },
-            headers: { type: "object", description: "Optional HTTP headers" },
-            body: { type: "string", description: "Request body (for POST/PUT)" },
+            url: { type: "string", description: "URL" },
+            method: { type: "string", description: "HTTP method. Default GET.", enum: ["GET", "POST", "PUT", "DELETE"] },
+            headers: { type: "object", description: "Optional headers" },
+            body: { type: "string", description: "Request body" },
           },
           required: ["url"],
         },
@@ -768,13 +751,13 @@ function globTool(_ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "glob",
-        description: "Find files matching a glob pattern. More powerful than list_directory for finding specific files. Examples: '**/*.ts', 'src/**/*.cs', '**/package.json'",
+        description: "Find files by glob pattern.",
         parameters: {
           type: "object",
           properties: {
-            pattern: { type: "string", description: "Glob pattern (e.g., '**/*.ts', 'src/**/*.cs')" },
-            cwd: { type: "string", description: "Working directory (default: current directory)" },
-            max_results: { type: "number", description: "Maximum number of results (default: 200)" },
+            pattern: { type: "string", description: "Glob pattern e.g. '**/*.ts'" },
+            cwd: { type: "string", description: "Working dir. Default current." },
+            max_results: { type: "number", description: "Max results. Default 200." },
           },
           required: ["pattern"],
         },

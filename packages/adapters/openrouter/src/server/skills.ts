@@ -100,11 +100,5 @@ export async function loadSkills(params: LoadSkillsParams): Promise<LoadedSkill[
 export function renderSkillsForPrompt(skills: LoadedSkill[]): string {
   if (skills.length === 0) return "";
   const blocks = skills.map((s) => `## Skill: ${s.name}\n\n${s.content.trim()}`);
-  return [
-    "# Available Skills",
-    "",
-    "The following skills are available to you. Read them carefully and apply them when relevant.",
-    "",
-    blocks.join("\n\n---\n\n"),
-  ].join("\n");
+  return ["# Skills", "", blocks.join("\n\n---\n\n")].join("\n");
 }

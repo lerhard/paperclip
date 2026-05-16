@@ -125,6 +125,28 @@ import {
   type as openrouterType,
 } from "@paperclipai/adapter-openrouter";
 import {
+  execute as deepseekExecute,
+  testEnvironment as deepseekTestEnvironment,
+  sessionCodec as deepseekSessionCodec,
+  listSkills as deepseekListSkills,
+  syncSkills as deepseekSyncSkills,
+} from "@paperclipai/adapter-deepseek-local/server";
+import {
+  agentConfigurationDoc as deepseekAgentConfigurationDoc,
+  models as deepseekModels,
+} from "@paperclipai/adapter-deepseek-local";
+import {
+  execute as kimiExecute,
+  testEnvironment as kimiTestEnvironment,
+  sessionCodec as kimiSessionCodec,
+  listSkills as kimiListSkills,
+  syncSkills as kimiSyncSkills,
+} from "@paperclipai/adapter-kimi-local/server";
+import {
+  agentConfigurationDoc as kimiAgentConfigurationDoc,
+  models as kimiModels,
+} from "@paperclipai/adapter-kimi-local";
+import {
   execute as hermesExecute,
   testEnvironment as hermesTestEnvironment,
   sessionCodec as hermesSessionCodec,
@@ -360,6 +382,38 @@ const geminiLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: geminiAgentConfigurationDoc,
 };
 
+const deepseekLocalAdapter: ServerAdapterModule = {
+  type: "deepseek_local",
+  execute: deepseekExecute,
+  testEnvironment: deepseekTestEnvironment,
+  listSkills: deepseekListSkills,
+  syncSkills: deepseekSyncSkills,
+  sessionCodec: deepseekSessionCodec,
+  sessionManagement: getAdapterSessionManagement("deepseek_local") ?? undefined,
+  models: deepseekModels,
+  supportsLocalAgentJwt: false,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: deepseekAgentConfigurationDoc,
+};
+
+const kimiLocalAdapter: ServerAdapterModule = {
+  type: "kimi_local",
+  execute: kimiExecute,
+  testEnvironment: kimiTestEnvironment,
+  listSkills: kimiListSkills,
+  syncSkills: kimiSyncSkills,
+  sessionCodec: kimiSessionCodec,
+  sessionManagement: getAdapterSessionManagement("kimi_local") ?? undefined,
+  models: kimiModels,
+  supportsLocalAgentJwt: false,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: kimiAgentConfigurationDoc,
+};
+
 const openclawGatewayAdapter: ServerAdapterModule = {
   type: "openclaw_gateway",
   execute: openclawGatewayExecute,
@@ -513,6 +567,8 @@ function registerBuiltInAdapters() {
     cursorCloudAdapter,
     cursorLocalAdapter,
     geminiLocalAdapter,
+    deepseekLocalAdapter,
+    kimiLocalAdapter,
     openclawGatewayAdapter,
     hermesLocalAdapter,
     processAdapter,
