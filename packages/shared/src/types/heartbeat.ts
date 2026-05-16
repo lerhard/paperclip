@@ -49,6 +49,7 @@ export interface HeartbeatRun {
   retryExhaustedReason?: string | null;
   livenessState: RunLivenessState | null;
   livenessReason: string | null;
+  executedAdapterType?: string | null;
   continuationAttempt: number;
   lastUsefulActionAt: Date | null;
   nextAction: string | null;

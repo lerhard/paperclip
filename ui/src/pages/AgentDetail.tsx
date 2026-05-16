@@ -331,7 +331,15 @@ export function RunInvocationCard({
     <div className="rounded-lg border border-border bg-background/60 p-3 space-y-2">
       <div className="text-xs font-medium text-muted-foreground">Invocation</div>
       {typeof payload.adapterType === "string" && (
-        <div className="text-xs"><span className="text-muted-foreground">Adapter: </span>{payload.adapterType}</div>
+        <div className="text-xs">
+          <span className="text-muted-foreground">Adapter: </span>
+          {payload.adapterType}
+          {typeof payload.fallbackFrom === "string" && (
+            <span className="text-amber-600 dark:text-amber-400 ml-1">
+              (fallback from {payload.fallbackFrom})
+            </span>
+          )}
+        </div>
       )}
       {typeof payload.cwd === "string" && (
         <div className="text-xs break-all"><span className="text-muted-foreground">Working dir: </span><span className="font-mono">{payload.cwd}</span></div>
@@ -1178,7 +1186,7 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: string }) {
+function LatestRunCard({ runs, agentId, agent }: { runs: HeartbeatRun[]; agentId: string; agent?: Agent }) {
   if (runs.length === 0) return null;
 
   const sorted = [...runs].sort(
@@ -1252,6 +1260,11 @@ function LatestRunCard({ runs, agentId }: { runs: HeartbeatRun[]; agentId: strin
           )}>
             {sourceLabels[run.invocationSource] ?? run.invocationSource}
           </span>
+          {run.executedAdapterType && run.executedAdapterType !== agent?.adapterType && (
+            <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+              {run.executedAdapterType.replace(/_local$/, "")}
+            </span>
+          )}
           <span className="ml-auto text-xs text-muted-foreground">{relativeTime(run.createdAt)}</span>
         </div>
 
@@ -1285,7 +1298,7 @@ function AgentOverview({
   return (
     <div className="space-y-8">
       {/* Latest Run */}
-      <LatestRunCard runs={runs} agentId={agentRouteId} />
+      <LatestRunCard runs={runs} agentId={agentRouteId} agent={agent} />
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1392,6 +1405,7 @@ function CostsSection({
               <tr className="border-b border-border bg-accent/20">
                 <th className="text-left px-3 py-2 font-medium text-muted-foreground">Date</th>
                 <th className="text-left px-3 py-2 font-medium text-muted-foreground">Run</th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Adapter</th>
                 <th className="text-right px-3 py-2 font-medium text-muted-foreground">Input</th>
                 <th className="text-right px-3 py-2 font-medium text-muted-foreground">Output</th>
                 <th className="text-right px-3 py-2 font-medium text-muted-foreground">Cost</th>
@@ -1404,6 +1418,11 @@ function CostsSection({
                   <tr key={run.id} className="border-b border-border last:border-b-0">
                     <td className="px-3 py-2">{formatDate(run.createdAt)}</td>
                     <td className="px-3 py-2 font-mono">{run.id.slice(0, 8)}</td>
+                    <td className="px-3 py-2">
+                      {run.executedAdapterType
+                        ? run.executedAdapterType.replace(/_local$/, "")
+                        : "-"}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.input)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.output)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">

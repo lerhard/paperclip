@@ -50,6 +50,7 @@ export const heartbeatRuns = pgTable(
     issueCommentRetryQueuedAt: timestamp("issue_comment_retry_queued_at", { withTimezone: true }),
     livenessState: text("liveness_state"),
     livenessReason: text("liveness_reason"),
+    executedAdapterType: text("executed_adapter_type"),
     continuationAttempt: integer("continuation_attempt").notNull().default(0),
     lastUsefulActionAt: timestamp("last_useful_action_at", { withTimezone: true }),
     nextAction: text("next_action"),

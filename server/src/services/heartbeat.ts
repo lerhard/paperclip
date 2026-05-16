@@ -7702,11 +7702,58 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       let adapterResult: AdapterExecutionResult = {} as AdapterExecutionResult;
       let usedAdapterType = agent.adapterType;
+      function isTransientAdapterError(err: unknown): boolean {
+        const msg = err instanceof Error ? err.message : String(err);
+        const lower = msg.toLowerCase();
+        // Rate limits
+        if (lower.includes("rate limit") || lower.includes("ratelimit") || lower.includes("too many requests") || lower.includes("429")) {
+          return true;
+        }
+        // Timeouts
+        if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("etimedout")) {
+          return true;
+        }
+        // Connection / network errors
+        if (
+          lower.includes("econnrefused") ||
+          lower.includes("econnreset") ||
+          lower.includes("enotfound") ||
+          lower.includes("socket hang up") ||
+          lower.includes("network error") ||
+          lower.includes("fetch failed") ||
+          lower.includes("unable to connect") ||
+          lower.includes("temporary failure") ||
+          lower.includes("dns lookup failed")
+        ) {
+          return true;
+        }
+        // Auth / config errors should NOT fallback
+        if (
+          lower.includes("unauthorized") ||
+          lower.includes("invalid api key") ||
+          lower.includes("authentication") ||
+          lower.includes("forbidden") ||
+          lower.includes("not enough arguments") ||
+          lower.includes("bad request")
+        ) {
+          return false;
+        }
+        // Default: treat as transient to be safe
+        return true;
+      }
+
       try {
         const primary = await tryAdapterExecute(agent.adapterType, {});
         adapterResult = primary.result;
         usedAdapterType = primary.usedAdapterType;
       } catch (primaryErr) {
+        if (!isTransientAdapterError(primaryErr)) {
+          await onLog(
+            "stderr",
+            `[paperclip] Primary adapter ${agent.adapterType} failed with a non-retryable error. Skipping fallback chain.\n`,
+          );
+          throw primaryErr;
+        }
         let lastErr = primaryErr;
         let fallbackSuccess = false;
         for (const fallback of fallbackChain) {
@@ -7729,6 +7776,13 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               "stderr",
               `[paperclip] Fallback adapter ${fallback.adapterType} also failed: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}\n`,
             );
+            if (!isTransientAdapterError(fallbackErr)) {
+              await onLog(
+                "stderr",
+                `[paperclip] Fallback adapter ${fallback.adapterType} failed with a non-retryable error. Stopping fallback chain.\n`,
+              );
+              break;
+            }
           }
         }
         if (!fallbackSuccess) {
@@ -7904,6 +7958,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         logBytes: logSummary?.bytes,
         logSha256: logSummary?.sha256,
         logCompressed: logSummary?.compressed ?? false,
+        executedAdapterType: usedAdapterType,
       });
       if (persistedRun) {
         persistedRun = await classifyAndPersistRunLiveness(persistedRun, persistedResultJson) ?? persistedRun;
