@@ -73,10 +73,20 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     icon: Code,
     recommended: true,
   },
+  deepseek_local: {
+    label: "DeepSeek",
+    description: "DeepSeek API agent",
+    icon: Sparkles,
+  },
   gemini_local: {
     label: "Gemini CLI",
     description: "Local Gemini agent",
     icon: Gem,
+  },
+  kimi_local: {
+    label: "Kimi",
+    description: "Moonshot AI (Kimi) API agent",
+    icon: Bot,
   },
   opencode_local: {
     label: "OpenCode",

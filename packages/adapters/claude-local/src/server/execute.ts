@@ -432,11 +432,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (instructionsFilePath) {
     try {
       const instructionsContent = await fs.readFile(instructionsFilePath, "utf-8");
-      const pathDirective =
-        `\nThe above agent instructions were loaded from ${instructionsFilePath}. ` +
-        `Resolve any relative file references from ${instructionsFileDir}. ` +
-        `This base directory is authoritative for sibling instruction files such as ` +
-        `./HEARTBEAT.md, ./SOUL.md, and ./TOOLS.md; do not resolve those from the parent agent directory.`;
+      const pathDirective = `\nInstructions loaded from ${instructionsFilePath}. Resolve relative refs from ${instructionsFileDir}. Authoritative for sibling files (HEARTBEAT.md, SOUL.md, TOOLS.md); do not resolve from parent agent dir.`;
       combinedInstructionsContents = instructionsContent + pathDirective;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

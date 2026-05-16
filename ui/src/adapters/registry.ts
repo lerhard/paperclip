@@ -4,7 +4,9 @@ import { claudeLocalUIAdapter } from "./claude-local";
 import { codexLocalUIAdapter } from "./codex-local";
 import { cursorCloudUIAdapter } from "./cursor-cloud";
 import { cursorLocalUIAdapter } from "./cursor";
+import { deepseekLocalUIAdapter } from "./deepseek-local";
 import { geminiLocalUIAdapter } from "./gemini-local";
+import { kimiLocalUIAdapter } from "./kimi-local";
 import { openCodeLocalUIAdapter } from "./opencode-local";
 import { openrouterUIAdapter } from "./openrouter";
 import { piLocalUIAdapter } from "./pi-local";
@@ -56,8 +58,10 @@ function registerBuiltInUIAdapters() {
     claudeLocalUIAdapter,
     codexLocalUIAdapter,
     cursorCloudUIAdapter,
+    deepseekLocalUIAdapter,
     geminiLocalUIAdapter,
     hermesLocalUIAdapter,
+    kimiLocalUIAdapter,
     openCodeLocalUIAdapter,
     openrouterUIAdapter,
     piLocalUIAdapter,

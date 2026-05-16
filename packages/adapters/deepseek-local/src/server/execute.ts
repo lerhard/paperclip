@@ -4,10 +4,17 @@ import type {
 } from "@paperclipai/adapter-utils";
 import { renderPaperclipWakePrompt } from "@paperclipai/adapter-utils/server-utils";
 import { DEEPSEEK_CHAT_ENDPOINT, type DeepSeekConfig } from "../index.js";
+import { buildTools, buildToolSchemas, findTool } from "./tools.js";
 
 interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
 }
 
 interface ChatCompletionResponse {
@@ -18,6 +25,11 @@ interface ChatCompletionResponse {
       role: "assistant";
       content: string | null;
       reasoning_content?: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+      }>;
     };
   }>;
   usage?: {
@@ -28,7 +40,7 @@ interface ChatCompletionResponse {
 }
 
 const DEFAULT_SYSTEM_PROMPT =
-  "Paperclip AI agent. EXECUTE tasks using tools. No descriptions — only actions.";
+  "Paperclip AI agent. EXECUTE tasks using tools. No descriptions — only actions. End with update_issue_status=done.";
 
 function resolveApiKey(config: DeepSeekConfig): string {
   const key = config.apiKey || process.env.DEEPSEEK_API_KEY || "";
@@ -50,7 +62,7 @@ function asNumber(value: unknown, fallback: number): number {
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const { config, runId, context, onLog } = ctx;
+  const { config, context, onLog, agent, runId, authToken } = ctx;
   const dsConfig: DeepSeekConfig = (config as Record<string, unknown>) || {};
 
   const apiKey = resolveApiKey(dsConfig);
@@ -59,6 +71,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const maxTokens = asNumber(dsConfig.maxTokens, 2048);
   const systemPrompt = asString(dsConfig.systemPrompt, DEFAULT_SYSTEM_PROMPT);
   const timeoutSec = asNumber(dsConfig.timeoutSec, 120);
+  const maxTurns = asNumber((config as any).maxTurns, 10);
+
+  const apiBaseUrl = process.env.PAPERCLIP_API_URL || "http://localhost:3100";
+  const currentIssueId =
+    typeof context.issueId === "string" && context.issueId.trim().length > 0
+      ? context.issueId.trim()
+      : null;
+
+  const tools = buildTools({
+    agentId: agent.id,
+    companyId: agent.companyId,
+    currentIssueId,
+    apiBaseUrl,
+    apiKey: authToken || "",
+    runId,
+  });
 
   // Build prompt from wake context (already compressed by renderPaperclipWakePrompt)
   const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession: false });
@@ -69,94 +97,152 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     { role: "user", content: userPrompt },
   ];
 
-  const body: Record<string, unknown> = {
-    model,
-    messages,
-    temperature,
-    max_tokens: maxTokens,
-  };
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let turnCount = 0;
 
-  // Enable prompt caching for DeepSeek-V3 (beta feature)
-  if (model === "deepseek-chat" || model.includes("deepseek-v3")) {
-    body.ephemeral = true;
-  }
+  while (turnCount < maxTurns) {
+    turnCount++;
+    const body: Record<string, unknown> = {
+      model,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      tools: buildToolSchemas(tools),
+    };
 
-  await onLog("stdout", `[paperclip] DeepSeek request: ${model} / ${messages.length} messages\n`);
+    if (model === "deepseek-chat" || model.includes("deepseek-v3")) {
+      body.ephemeral = true;
+    }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
+    await onLog("stdout", `[paperclip] DeepSeek turn ${turnCount}: ${messages.length} messages\n`);
 
-  let response: Response;
-  try {
-    response = await fetch(DEEPSEEK_CHAT_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    clearTimeout(timer);
-    if (err instanceof Error && err.name === "AbortError") {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
+
+    let response: Response;
+    try {
+      response = await fetch(DEEPSEEK_CHAT_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        return {
+          exitCode: null,
+          signal: null,
+          timedOut: true,
+          errorMessage: `DeepSeek request timed out after ${timeoutSec}s`,
+          errorCode: "timeout",
+        };
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "unknown");
       return {
-        exitCode: null,
+        exitCode: response.status,
         signal: null,
-        timedOut: true,
-        errorMessage: `DeepSeek request timed out after ${timeoutSec}s`,
-        errorCode: "timeout",
+        timedOut: false,
+        errorMessage: `DeepSeek API returned ${response.status}: ${text.slice(0, 500)}`,
+        errorCode: "api_error",
       };
     }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => "unknown");
-    return {
-      exitCode: response.status,
-      signal: null,
-      timedOut: false,
-      errorMessage: `DeepSeek API returned ${response.status}: ${text.slice(0, 500)}`,
-      errorCode: "api_error",
-    };
-  }
+    const data = (await response.json()) as ChatCompletionResponse;
+    const choice = data.choices?.[0];
+    const message = choice?.message;
 
-  const data = (await response.json()) as ChatCompletionResponse;
+    if (data.usage) {
+      totalInputTokens += data.usage.prompt_tokens ?? 0;
+      totalOutputTokens += data.usage.completion_tokens ?? 0;
+    }
 
-  const choice = data.choices?.[0];
-  const assistantContent = choice?.message?.content || "";
-  const reasoningContent = (choice?.message as Record<string, unknown> | undefined)?.reasoning_content as string | undefined;
-  const summary = reasoningContent ? `[Reasoning]\n${reasoningContent}\n\n[Answer]\n${assistantContent}` : assistantContent;
+    messages.push({
+      role: "assistant",
+      content: message?.content || "",
+      tool_calls: message?.tool_calls,
+    });
 
-  const usage = data.usage;
-  const usageSummary = usage
-    ? {
-        inputTokens: usage.prompt_tokens ?? 0,
-        outputTokens: usage.completion_tokens ?? 0,
-        totalTokens: usage.total_tokens ?? 0,
+    if (!message?.tool_calls || message.tool_calls.length === 0) {
+      const assistantContent = message?.content || "";
+      const reasoningContent = (message as Record<string, unknown> | undefined)?.reasoning_content as string | undefined;
+      const summary = reasoningContent
+        ? `[Reasoning]\n${reasoningContent}\n\n[Answer]\n${assistantContent}`
+        : assistantContent;
+
+      await onLog("stdout", `[paperclip] DeepSeek done. Turns: ${turnCount}\n`);
+
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        summary,
+        usage: {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+        },
+        sessionId: data.id || null,
+        provider: "deepseek",
+        biller: "deepseek",
+        model,
+        billingType: "api",
+        resultJson: {
+          model,
+          choices: data.choices,
+          usage: data.usage,
+        },
+      };
+    }
+
+    // Execute tool calls
+    for (const toolCall of message.tool_calls) {
+      const tool = findTool(tools, toolCall.function.name);
+      if (!tool) {
+        messages.push({
+          role: "tool",
+          content: JSON.stringify({ error: `Unknown tool: ${toolCall.function.name}` }),
+          tool_call_id: toolCall.id,
+        });
+        continue;
       }
-    : undefined;
 
-  await onLog("stdout", `[paperclip] DeepSeek response received. Tokens: ${usageSummary?.totalTokens ?? "unknown"}\n`);
+      let args: Record<string, unknown>;
+      try {
+        args = JSON.parse(toolCall.function.arguments);
+      } catch {
+        messages.push({
+          role: "tool",
+          content: JSON.stringify({ error: "Invalid tool arguments JSON" }),
+          tool_call_id: toolCall.id,
+        });
+        continue;
+      }
+
+      await onLog("stdout", `[paperclip] Tool call: ${toolCall.function.name}\n`);
+      const result = await tool.execute(args);
+      messages.push({
+        role: "tool",
+        content: result.content,
+        tool_call_id: toolCall.id,
+      });
+    }
+  }
 
   return {
-    exitCode: 0,
+    exitCode: 1,
     signal: null,
     timedOut: false,
-    summary,
-    usage: usageSummary,
-    sessionId: data.id || null,
-    provider: "deepseek",
-    biller: "deepseek",
-    model,
-    billingType: "api",
-    resultJson: {
-      model,
-      choices: data.choices,
-      usage: data.usage,
-    },
+    errorMessage: `Max turns (${maxTurns}) reached without completion`,
+    errorCode: "max_turns_exhausted",
   };
 }
