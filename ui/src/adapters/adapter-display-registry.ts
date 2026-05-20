@@ -88,6 +88,11 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     description: "Moonshot AI (Kimi) API agent",
     icon: Bot,
   },
+  grok_local: {
+    label: "Grok Build",
+    description: "Local Grok Build agent",
+    icon: Bot,
+  },
   opencode_local: {
     label: "OpenCode",
     description: "Local multi-provider agent",

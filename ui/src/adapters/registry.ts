@@ -7,6 +7,7 @@ import { cursorLocalUIAdapter } from "./cursor";
 import { deepseekLocalUIAdapter } from "./deepseek-local";
 import { geminiLocalUIAdapter } from "./gemini-local";
 import { kimiLocalUIAdapter } from "./kimi-local";
+import { grokLocalUIAdapter } from "./grok-local";
 import { openCodeLocalUIAdapter } from "./opencode-local";
 import { openrouterUIAdapter } from "./openrouter";
 import { piLocalUIAdapter } from "./pi-local";
@@ -60,6 +61,7 @@ function registerBuiltInUIAdapters() {
     cursorCloudUIAdapter,
     deepseekLocalUIAdapter,
     geminiLocalUIAdapter,
+    grokLocalUIAdapter,
     hermesLocalUIAdapter,
     kimiLocalUIAdapter,
     openCodeLocalUIAdapter,
