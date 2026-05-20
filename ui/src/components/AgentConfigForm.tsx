@@ -240,12 +240,15 @@ function FallbackEntryModelSelect({
       {isLoading ? (
         <span className="text-[11px] text-muted-foreground">Loading…</span>
       ) : (
-        <Select value={model} onValueChange={onChange}>
+        <Select
+          value={model || "__default__"}
+          onValueChange={(v) => onChange(v === "__default__" ? "" : v)}
+        >
           <SelectTrigger className="flex-1 text-sm h-8">
             <SelectValue placeholder="Select model (optional)" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">Default / Auto</SelectItem>
+            <SelectItem value="__default__">Default / Auto</SelectItem>
             {fallbackModels.map((m) => (
               <SelectItem key={m.id} value={m.id}>
                 {m.label || m.id}
