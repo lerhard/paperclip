@@ -7,12 +7,31 @@ import type {
 export { execute } from "./execute.js";
 export { testEnvironment } from "./test.js";
 
+async function fetchProxyModels(): Promise<{ id: string; label: string }[]> {
+  const baseUrl = (process.env.OPENAI_PROXY_BASE_URL || "").replace(/\/$/, "");
+  const apiKey = process.env.OPENAI_PROXY_API_KEY || "";
+  if (!baseUrl || !apiKey) return [];
+
+  try {
+    const res = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { data?: Array<{ id: string }> };
+    const models = Array.isArray(data.data) ? data.data : [];
+    return models.map((m) => ({ id: m.id, label: m.id }));
+  } catch {
+    return [];
+  }
+}
+
 export async function listModels(): Promise<{ id: string; label: string }[]> {
-  return [];
+  return fetchProxyModels();
 }
 
 export async function refreshModels(): Promise<{ id: string; label: string }[]> {
-  return [];
+  return fetchProxyModels();
 }
 
 export const sessionCodec: AdapterSessionCodec = {

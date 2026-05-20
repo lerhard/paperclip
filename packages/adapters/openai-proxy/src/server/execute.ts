@@ -86,7 +86,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const temperature = asNumber(proxyConfig.temperature, 0.7);
   const maxTokens = asNumber(proxyConfig.maxTokens, 2048);
   const systemPrompt = asString(proxyConfig.systemPrompt, DEFAULT_SYSTEM_PROMPT);
-  const timeoutSec = asNumber(proxyConfig.timeoutSec, 120);
+  const timeoutSec = Math.max(30, asNumber(proxyConfig.timeoutSec, 120));
   const maxTurns = asNumber((config as any).maxTurns, DEFAULT_MAX_TURNS);
 
   const chatEndpoint = `${baseUrl}/chat/completions`;
