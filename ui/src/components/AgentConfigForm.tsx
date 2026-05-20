@@ -200,6 +200,64 @@ function clampDelayMsFromSeconds(value: number) {
 }
 
 
+/* ---- Fallback entry model selector ---- */
+
+function FallbackEntryModelSelect({
+  companyId,
+  adapterType,
+  model,
+  onChange,
+}: {
+  companyId: string;
+  adapterType: string;
+  model: string;
+  onChange: (model: string) => void;
+}) {
+  const {
+    data: fallbackModels = [],
+    isLoading,
+  } = useQuery({
+    queryKey: queryKeys.agents.adapterModels(companyId, adapterType, null),
+    queryFn: () => agentsApi.adapterModels(companyId, adapterType, { environmentId: null }),
+    enabled: Boolean(companyId) && Boolean(adapterType),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (!adapterType) return null;
+
+  const hasModels = fallbackModels.length > 0;
+  if (!hasModels) {
+    return (
+      <div className="text-[11px] text-muted-foreground italic">
+        No model selection for this adapter.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] text-muted-foreground w-12 shrink-0">Model</span>
+      {isLoading ? (
+        <span className="text-[11px] text-muted-foreground">Loading…</span>
+      ) : (
+        <Select value={model} onValueChange={onChange}>
+          <SelectTrigger className="flex-1 text-sm h-8">
+            <SelectValue placeholder="Select model (optional)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Default / Auto</SelectItem>
+            {fallbackModels.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.label || m.id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
+  );
+}
+
 /* ---- Form ---- */
 
 export function AgentConfigForm(props: AgentConfigFormProps) {
@@ -1289,26 +1347,16 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
-                    <Field label="Adapter config (JSON)" hint="Optional config overrides for this fallback adapter">
-                      <Textarea
-                        value={entry.adapterConfig ? JSON.stringify(entry.adapterConfig, null, 2) : ""}
-                        onChange={(e) => {
-                          const text = e.target.value.trim();
-                          if (!text) {
-                            updateFallbackEntry(index, { adapterConfig: {} });
-                            return;
-                          }
-                          try {
-                            const parsed = JSON.parse(text);
-                            updateFallbackEntry(index, { adapterConfig: parsed });
-                          } catch {
-                            // Allow invalid JSON while typing; only store valid JSON
-                          }
-                        }}
-                        className="min-h-[60px] text-xs font-mono"
-                        placeholder='{"model": "gpt-4o"}'
-                      />
-                    </Field>
+                    <FallbackEntryModelSelect
+                      companyId={selectedCompanyId!}
+                      adapterType={entry.adapterType}
+                      model={typeof entry.adapterConfig?.model === "string" ? entry.adapterConfig.model : ""}
+                      onChange={(model) =>
+                        updateFallbackEntry(index, {
+                          adapterConfig: { ...(entry.adapterConfig ?? {}), model },
+                        })
+                      }
+                    />
                   </div>
                 ))}
               </div>
