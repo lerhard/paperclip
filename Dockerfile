@@ -34,6 +34,7 @@ COPY packages/adapters/opencode-local/package.json packages/adapters/opencode-lo
 COPY packages/adapters/pi-local/package.json packages/adapters/pi-local/
 COPY packages/adapters/openrouter/package.json packages/adapters/openrouter/
 COPY packages/adapters/deepseek-local/package.json packages/adapters/deepseek-local/
+COPY packages/adapters/openai-proxy/package.json packages/adapters/openai-proxy/
 COPY packages/adapters/kimi-local/package.json packages/adapters/kimi-local/
 COPY packages/plugins/sdk/package.json packages/plugins/sdk/
 COPY --parents packages/plugins/sandbox-providers/./*/package.json packages/plugins/sandbox-providers/
