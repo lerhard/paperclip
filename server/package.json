@@ -50,6 +50,7 @@
     "@paperclipai/adapter-cursor-cloud": "workspace:*",
     "@paperclipai/adapter-cursor-local": "workspace:*",
     "@paperclipai/adapter-deepseek-local": "workspace:*",
+    "@paperclipai/adapter-openai-proxy": "workspace:*",
     "@paperclipai/adapter-gemini-local": "workspace:*",
     "@paperclipai/adapter-kimi-local": "workspace:*",
     "@paperclipai/adapter-grok-local": "workspace:*",

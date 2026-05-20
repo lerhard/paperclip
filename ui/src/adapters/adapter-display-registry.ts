@@ -78,6 +78,11 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     description: "DeepSeek API agent",
     icon: Sparkles,
   },
+  openai_proxy: {
+    label: "OpenAI Proxy",
+    description: "Custom OpenAI-compatible API proxy",
+    icon: Sparkles,
+  },
   gemini_local: {
     label: "Gemini CLI",
     description: "Local Gemini agent",

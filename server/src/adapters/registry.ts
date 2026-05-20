@@ -148,6 +148,17 @@ import {
   models as deepseekModels,
 } from "@paperclipai/adapter-deepseek-local";
 import {
+  execute as openaiProxyExecute,
+  testEnvironment as openaiProxyTestEnvironment,
+  sessionCodec as openaiProxySessionCodec,
+  listSkills as openaiProxyListSkills,
+  syncSkills as openaiProxySyncSkills,
+} from "@paperclipai/adapter-openai-proxy/server";
+import {
+  agentConfigurationDoc as openaiProxyAgentConfigurationDoc,
+  models as openaiProxyModels,
+} from "@paperclipai/adapter-openai-proxy";
+import {
   execute as kimiExecute,
   testEnvironment as kimiTestEnvironment,
   sessionCodec as kimiSessionCodec,
@@ -411,6 +422,22 @@ const deepseekLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: deepseekAgentConfigurationDoc,
 };
 
+const openaiProxyAdapter: ServerAdapterModule = {
+  type: "openai_proxy",
+  execute: openaiProxyExecute,
+  testEnvironment: openaiProxyTestEnvironment,
+  listSkills: openaiProxyListSkills,
+  syncSkills: openaiProxySyncSkills,
+  sessionCodec: openaiProxySessionCodec,
+  sessionManagement: getAdapterSessionManagement("openai_proxy") ?? undefined,
+  models: openaiProxyModels,
+  supportsLocalAgentJwt: false,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: openaiProxyAgentConfigurationDoc,
+};
+
 const kimiLocalAdapter: ServerAdapterModule = {
   type: "kimi_local",
   execute: kimiExecute,
@@ -602,6 +629,7 @@ function registerBuiltInAdapters() {
     cursorLocalAdapter,
     geminiLocalAdapter,
     deepseekLocalAdapter,
+    openaiProxyAdapter,
     kimiLocalAdapter,
     grokLocalAdapter,
     openclawGatewayAdapter,

@@ -5,6 +5,7 @@ import { codexLocalUIAdapter } from "./codex-local";
 import { cursorCloudUIAdapter } from "./cursor-cloud";
 import { cursorLocalUIAdapter } from "./cursor";
 import { deepseekLocalUIAdapter } from "./deepseek-local";
+import { openaiProxyUIAdapter } from "./openai-proxy";
 import { geminiLocalUIAdapter } from "./gemini-local";
 import { kimiLocalUIAdapter } from "./kimi-local";
 import { grokLocalUIAdapter } from "./grok-local";
@@ -60,6 +61,7 @@ function registerBuiltInUIAdapters() {
     codexLocalUIAdapter,
     cursorCloudUIAdapter,
     deepseekLocalUIAdapter,
+    openaiProxyUIAdapter,
     geminiLocalUIAdapter,
     grokLocalUIAdapter,
     hermesLocalUIAdapter,
