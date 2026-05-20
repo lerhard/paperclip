@@ -214,8 +214,11 @@ function FallbackEntryModelSelect({
   onChange: (model: string) => void;
 }) {
   const {
-    data: fallbackModels = [],
+    data: fallbackModels,
     isLoading,
+    isError,
+    error,
+    refetch,
   } = useQuery({
     queryKey: queryKeys.agents.adapterModels(companyId, adapterType, null),
     queryFn: () => agentsApi.adapterModels(companyId, adapterType, { environmentId: null }),
@@ -225,11 +228,39 @@ function FallbackEntryModelSelect({
 
   if (!adapterType) return null;
 
-  const hasModels = fallbackModels.length > 0;
-  if (!hasModels) {
+  if (isLoading) {
     return (
-      <div className="text-[11px] text-muted-foreground italic">
-        No model selection for this adapter.
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-muted-foreground w-12 shrink-0">Model</span>
+        <span className="text-[11px] text-muted-foreground">Loading models…</span>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-muted-foreground w-12 shrink-0">Model</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-destructive">
+            {error instanceof Error ? error.message : "Failed to load models"}
+          </span>
+          <Button variant="ghost" size="sm" className="h-6 text-[11px]" onClick={() => refetch()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const models = fallbackModels ?? [];
+  if (models.length === 0) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-muted-foreground w-12 shrink-0">Model</span>
+        <span className="text-[11px] text-muted-foreground italic">
+          No model selection for this adapter.
+        </span>
       </div>
     );
   }
@@ -237,26 +268,22 @@ function FallbackEntryModelSelect({
   return (
     <div className="flex items-center gap-2">
       <span className="text-[11px] text-muted-foreground w-12 shrink-0">Model</span>
-      {isLoading ? (
-        <span className="text-[11px] text-muted-foreground">Loading…</span>
-      ) : (
-        <Select
-          value={model || "__default__"}
-          onValueChange={(v) => onChange(v === "__default__" ? "" : v)}
-        >
-          <SelectTrigger className="flex-1 text-sm h-8">
-            <SelectValue placeholder="Select model (optional)" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__default__">Default / Auto</SelectItem>
-            {fallbackModels.map((m) => (
-              <SelectItem key={m.id} value={m.id}>
-                {m.label || m.id}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      <Select
+        value={model || "__default__"}
+        onValueChange={(v) => onChange(v === "__default__" ? "" : v)}
+      >
+        <SelectTrigger className="flex-1 text-sm h-8">
+          <SelectValue placeholder="Select model (optional)" />
+        </SelectTrigger>
+        <SelectContent className="max-h-[300px] overflow-y-auto">
+          <SelectItem value="__default__">Default / Auto</SelectItem>
+          {models.map((m) => (
+            <SelectItem key={m.id} value={m.id}>
+              {m.label || m.id}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
