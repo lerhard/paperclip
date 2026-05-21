@@ -104,49 +104,90 @@ function resolvePaperclipApiBaseUrl(context: Record<string, unknown>): string {
 
 // ----- Paperclip API helpers (lightweight, no external class) -----
 
-async function checkoutIssue(apiBaseUrl: string, authToken: string, issueId: string, runId: string): Promise<void> {
-  const res = await fetch(`${apiBaseUrl}/api/issues/${issueId}/checkout`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ runId }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`checkout failed: ${res.status} ${text.slice(0, 200)}`);
+async function paperclipFetchWithRetry(
+  url: string,
+  init: RequestInit,
+  opts: { maxRetries?: number; label: string; onLog?: AdapterExecutionContext["onLog"] },
+): Promise<Response> {
+  const maxRetries = opts.maxRetries ?? 3;
+  let lastErr = "";
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      if (res.ok) return res;
+      const text = await res.text().catch(() => "");
+      lastErr = `${res.status}: ${text.slice(0, 200)}`;
+      // 5xx or connection errors — retry; 4xx (except 429) don't retry
+      if (res.status >= 500 || res.status === 429) {
+        if (attempt < maxRetries) {
+          const backoff = Math.min(1000 * Math.pow(2, attempt), 15000);
+          if (opts.onLog) {
+            opts.onLog("stderr", `[openai-proxy] ${opts.label} failed (${lastErr}), retrying in ${backoff}ms (attempt ${attempt + 1}/${maxRetries + 1})...\n`);
+          }
+          await sleep(backoff);
+          continue;
+        }
+      }
+      throw new Error(lastErr);
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err);
+      if (attempt < maxRetries) {
+        const backoff = Math.min(1000 * Math.pow(2, attempt), 15000);
+        if (opts.onLog) {
+          opts.onLog("stderr", `[openai-proxy] ${opts.label} error (${lastErr}), retrying in ${backoff}ms (attempt ${attempt + 1}/${maxRetries + 1})...\n`);
+        }
+        await sleep(backoff);
+        continue;
+      }
+      throw new Error(`All ${maxRetries + 1} attempts failed for ${opts.label}: ${lastErr}`);
+    }
   }
+  throw new Error(`All ${maxRetries + 1} attempts failed for ${opts.label}: ${lastErr}`);
 }
 
-async function updateIssueStatus(apiBaseUrl: string, authToken: string, issueId: string, status: string, statusReason?: string): Promise<void> {
-  const res = await fetch(`${apiBaseUrl}/api/issues/${issueId}`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-      "Content-Type": "application/json",
+async function checkoutIssue(apiBaseUrl: string, authToken: string, issueId: string, runId: string, onLog?: AdapterExecutionContext["onLog"]): Promise<void> {
+  const res = await paperclipFetchWithRetry(
+    `${apiBaseUrl}/api/issues/${issueId}/checkout`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ runId }),
     },
-    body: JSON.stringify({ status, statusReason: statusReason ?? null }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`update status failed: ${res.status} ${text.slice(0, 200)}`);
-  }
+    { label: "checkoutIssue", onLog },
+  );
 }
 
-async function addIssueComment(apiBaseUrl: string, authToken: string, issueId: string, body: string): Promise<void> {
-  const res = await fetch(`${apiBaseUrl}/api/issues/${issueId}/comments`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-      "Content-Type": "application/json",
+async function updateIssueStatus(apiBaseUrl: string, authToken: string, issueId: string, status: string, statusReason?: string, onLog?: AdapterExecutionContext["onLog"]): Promise<void> {
+  const res = await paperclipFetchWithRetry(
+    `${apiBaseUrl}/api/issues/${issueId}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status, statusReason: statusReason ?? null }),
     },
-    body: JSON.stringify({ body }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`add comment failed: ${res.status} ${text.slice(0, 200)}`);
-  }
+    { label: "updateIssueStatus", onLog },
+  );
+}
+
+async function addIssueComment(apiBaseUrl: string, authToken: string, issueId: string, body: string, onLog?: AdapterExecutionContext["onLog"]): Promise<void> {
+  const res = await paperclipFetchWithRetry(
+    `${apiBaseUrl}/api/issues/${issueId}/comments`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body }),
+    },
+    { label: "addIssueComment", onLog },
+  );
 }
 
 // ----- retry helper -----
@@ -324,7 +365,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let issueLocked = false;
   if (hasAuthToken && currentIssueId) {
     try {
-      await checkoutIssue(paperclipApiBaseUrl, authToken, currentIssueId, runId);
+      await checkoutIssue(paperclipApiBaseUrl, authToken, currentIssueId, runId, onLog);
       issueLocked = true;
       emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Checked out issue ${currentIssueId}` });
     } catch (err) {
@@ -336,7 +377,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // Mark in_progress
     if (issueLocked) {
       try {
-        await updateIssueStatus(paperclipApiBaseUrl, authToken, currentIssueId, "in_progress");
+        await updateIssueStatus(paperclipApiBaseUrl, authToken, currentIssueId, "in_progress", undefined, onLog);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] could not set in_progress: ${reason}` });
@@ -552,7 +593,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // Post final text as comment
     if (finalText.trim().length > 0) {
       try {
-        await addIssueComment(paperclipApiBaseUrl, authToken, currentIssueId, finalText);
+        await addIssueComment(paperclipApiBaseUrl, authToken, currentIssueId, finalText, onLog);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] could not post final comment: ${reason}` });
@@ -576,7 +617,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
     if (nextStatus) {
       try {
-        await updateIssueStatus(paperclipApiBaseUrl, authToken, currentIssueId, nextStatus, statusReason ?? undefined);
+        await updateIssueStatus(paperclipApiBaseUrl, authToken, currentIssueId, nextStatus, statusReason ?? undefined, onLog);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] could not update final status: ${reason}` });
