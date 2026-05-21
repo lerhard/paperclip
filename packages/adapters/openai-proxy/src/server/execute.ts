@@ -8,7 +8,7 @@ import { buildTools, buildToolSchemas, findTool } from "./tools.js";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | null;
   tool_calls?: Array<{
     id: string;
     type: "function";
@@ -89,6 +89,158 @@ function resolvePaperclipApiBaseUrl(context: Record<string, unknown>): string {
   return "http://localhost:3100";
 }
 
+// ----- Paperclip API helpers (lightweight, no external class) -----
+
+async function checkoutIssue(apiBaseUrl: string, authToken: string, issueId: string, runId: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl}/api/issues/${issueId}/checkout`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ runId }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`checkout failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+}
+
+async function updateIssueStatus(apiBaseUrl: string, authToken: string, issueId: string, status: string, statusReason?: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl}/api/issues/${issueId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status, statusReason: statusReason ?? null }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`update status failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+}
+
+async function addIssueComment(apiBaseUrl: string, authToken: string, issueId: string, body: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl}/api/issues/${issueId}/comments`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`add comment failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+}
+
+// ----- retry helper -----
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  opts: { maxRetries?: number; timeoutMs?: number; onLog?: AdapterExecutionContext["onLog"] },
+): Promise<Response> {
+  const maxRetries = opts.maxRetries ?? 3;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  let lastErrText = "";
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      clearTimeout(timer);
+      lastErrText = err instanceof Error ? err.message : String(err);
+      if (attempt < maxRetries) {
+        const backoff = Math.min(1000 * Math.pow(2, attempt), 30_000);
+        if (opts.onLog) {
+          await opts.onLog("stderr", `[openai-proxy] Request failed (attempt ${attempt + 1}/${maxRetries + 1}), backing off ${backoff}ms...\n`);
+        }
+        await sleep(backoff);
+        continue;
+      }
+      throw new Error(`All ${maxRetries + 1} attempts failed: ${lastErrText}`);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    // 429 rate limit
+    if (res.status === 429) {
+      lastErrText = await res.text().catch(() => "Rate limited");
+      const resetHeader = res.headers.get("x-ratelimit-reset");
+      let waitMs = 2000;
+      if (resetHeader) {
+        const ts = parseInt(resetHeader, 10);
+        if (!isNaN(ts)) waitMs = Math.max(0, ts - Date.now());
+      }
+      if (attempt < maxRetries) {
+        if (opts.onLog) {
+          await opts.onLog("stderr", `[openai-proxy] Rate limited (attempt ${attempt + 1}/${maxRetries + 1}), waiting ${Math.ceil(waitMs / 1000)}s...\n`);
+        }
+        await sleep(waitMs + 500);
+        continue;
+      }
+      throw new Error(`Rate limited after ${maxRetries + 1} attempts: ${lastErrText.slice(0, 200)}`);
+    }
+
+    // 5xx server error
+    if (res.status >= 500 && res.status < 600) {
+      lastErrText = await res.text().catch(() => `Server error ${res.status}`);
+      if (attempt < maxRetries) {
+        const backoff = Math.min(1000 * Math.pow(2, attempt), 30_000);
+        if (opts.onLog) {
+          await opts.onLog("stderr", `[openai-proxy] Server error ${res.status} (attempt ${attempt + 1}/${maxRetries + 1}), backing off ${backoff}ms...\n`);
+        }
+        await sleep(backoff);
+        continue;
+      }
+      throw new Error(`Server error ${res.status} after ${maxRetries + 1} attempts: ${lastErrText.slice(0, 200)}`);
+    }
+
+    // 400 context length
+    if (res.status === 400) {
+      const text = await res.text();
+      const isContextLength = /maximum context length|context length is|too many tokens/i.test(text);
+      if (!isContextLength) {
+        throw new Error(`OpenAI Proxy API error 400: ${text.slice(0, 500)}`);
+      }
+      // Try truncating messages if body has them
+      if (attempt < maxRetries && init.body) {
+        try {
+          const parsed = JSON.parse(init.body as string);
+          if (Array.isArray(parsed.messages) && parsed.messages.length > 3) {
+            const keep = Math.max(2, Math.floor(parsed.messages.length / 2));
+            const systemMsg = parsed.messages[0];
+            const recent = parsed.messages.slice(-keep);
+            parsed.messages = [systemMsg, ...recent];
+            init.body = JSON.stringify(parsed);
+            if (opts.onLog) {
+              await opts.onLog("stderr", `[openai-proxy] Context too long, truncating messages (${parsed.messages.length} kept)...\n`);
+            }
+            continue;
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      throw new Error(`OpenAI Proxy API error 400 (context length): ${text.slice(0, 500)}`);
+    }
+
+    // Any other non-2xx: don't retry
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`OpenAI Proxy API error ${res.status}: ${text.slice(0, 500)}`);
+    }
+
+    return res;
+  }
+
+  throw new Error(`All ${maxRetries + 1} attempts failed: ${lastErrText}`);
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { config, context, onLog, agent, runId, authToken } = ctx;
   const proxyConfig = (config ?? {}) as unknown as OpenAiProxyConfig;
@@ -107,19 +259,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const maxTurns = asNumber((config as any).maxTurns, DEFAULT_MAX_TURNS);
 
   const chatEndpoint = `${baseUrl}/chat/completions`;
+  const paperclipApiBaseUrl = resolvePaperclipApiBaseUrl(context);
+  const hasAuthToken = typeof authToken === "string" && authToken.length > 0;
 
-  const tools = buildTools({
-    agentId: agent.id,
-    companyId: agent.companyId,
-    currentIssueId: (context.issueId as string | null | undefined) ?? null,
-    apiBaseUrl: resolvePaperclipApiBaseUrl(context),
-    apiKey: (authToken as string | null) ?? "",
-    runId,
-  });
-
+  // Only build Paperclip tools if we have an auth token; otherwise the model
+  // can still respond textually but cannot mutate state.
+  const tools = hasAuthToken
+    ? buildTools({
+        agentId: agent.id,
+        companyId: agent.companyId,
+        currentIssueId: (context.issueId as string | null | undefined) ?? null,
+        apiBaseUrl: paperclipApiBaseUrl,
+        apiKey: authToken,
+        runId,
+      })
+    : [];
   const toolSchemas = buildToolSchemas(tools);
 
-  const issueId = context.issueId ?? "";
+  const currentIssueId = (context.issueId as string | null | undefined) ?? null;
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx);
 
   const ts = () => new Date().toISOString();
@@ -131,20 +288,61 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionId: runId,
   });
 
+  if (!hasAuthToken) {
+    emit(onLog, {
+      kind: "stderr",
+      ts: ts(),
+      text: "[openai-proxy] No authToken — paperclip_api tools disabled. Agent can only generate text.",
+    });
+  }
+
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: issueId
-        ? `${systemPrompt}\n\nYou are working on issue ${issueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
+      content: currentIssueId
+        ? `${systemPrompt}\n\nYou are working on issue ${currentIssueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
         : `${systemPrompt}\n\n${structuredWakePrompt}`,
     },
   ];
 
   const MAX_CONTEXT = asNumber((config as any).maxContextMessages, DEFAULT_MAX_CONTEXT);
 
+  // ----- issue checkout (same pattern as OpenRouter) -----
+  let issueLocked = false;
+  if (hasAuthToken && currentIssueId) {
+    try {
+      await checkoutIssue(paperclipApiBaseUrl, authToken, currentIssueId, runId);
+      issueLocked = true;
+      emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Checked out issue ${currentIssueId}` });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] checkout failed: ${reason}. Continuing — heartbeat may have pre-locked.` });
+      issueLocked = true; // optimistic: let writes fail at the API level if truly locked
+    }
+
+    // Mark in_progress
+    if (issueLocked) {
+      try {
+        await updateIssueStatus(paperclipApiBaseUrl, authToken, currentIssueId, "in_progress");
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] could not set in_progress: ${reason}` });
+      }
+    }
+  }
+
   let finalText = "";
-  let stoppedReason: "completed" | "max_turns" | "error" = "completed";
+  let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
+  let runError: { message: string; code: string } | null = null;
   let turn = 0;
+  let totalUsage = { inputTokens: 0, outputTokens: 0 };
+
+  // Loop-detection: same tool + same args 3x in a row = break
+  const recentCalls: string[] = [];
+  const REPEAT_THRESHOLD = 3;
+
+  // Tool result cache: avoid re-executing identical calls across turns
+  const toolResultCache = new Map<string, { content: string; isError: boolean }>();
 
   try {
     while (turn < maxTurns) {
@@ -161,8 +359,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (MAX_CONTEXT && messages.length > MAX_CONTEXT + 1) {
         const systemMsg = messages[0];
         let startIndex = messages.length - MAX_CONTEXT;
-        // Never start the slice with a "tool" message — its parent "assistant"
-        // (which carries the matching tool_calls) might have been truncated out.
         while (startIndex > 1 && messages[startIndex].role === "tool") {
           startIndex--;
         }
@@ -180,33 +376,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         body.tool_choice = "auto";
       }
 
-      const controller = new AbortController();
-      const timeoutTimer = setTimeout(() => controller.abort(), timeoutSec * 1000);
-
-      let res: Response;
-      try {
-        res = await fetch(chatEndpoint, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timeoutTimer);
-      }
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`OpenAI Proxy API error ${res.status}: ${text.slice(0, 500)}`);
-      }
+      const res = await fetchWithRetry(chatEndpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      }, { maxRetries: 3, timeoutMs: timeoutSec * 1000, onLog });
 
       const data = (await res.json()) as ChatCompletionResponse;
       const choice = data.choices?.[0];
       if (!choice) {
         throw new Error("No choices returned from OpenAI Proxy API");
+      }
+
+      if (data.usage) {
+        totalUsage.inputTokens += data.usage.prompt_tokens ?? 0;
+        totalUsage.outputTokens += data.usage.completion_tokens ?? 0;
       }
 
       const msg = choice.message;
@@ -219,9 +406,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       });
 
       if (msg.tool_calls && msg.tool_calls.length > 0) {
+        // OpenAI spec: content should be null (or empty) when tool_calls are present
         messages.push({
           role: "assistant",
-          content: msg.content ?? "",
+          content: msg.content || null,
           tool_calls: msg.tool_calls,
         });
 
@@ -236,7 +424,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
           const tool = findTool(tools, tc.function.name);
           let result: { content: string; isError: boolean };
-          if (!tool) {
+          const cacheKey = `${tc.function.name}::${tc.function.arguments}`;
+          const cached = toolResultCache.get(cacheKey);
+
+          if (cached) {
+            result = cached;
+            emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Cache hit: ${tc.function.name}` });
+          } else if (!tool) {
             result = { content: JSON.stringify({ error: `Unknown tool: ${tc.function.name}` }), isError: true };
           } else {
             let args: Record<string, unknown> = {};
@@ -256,7 +450,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               continue;
             }
             result = await tool.execute(args);
+            toolResultCache.set(cacheKey, result);
           }
+
           messages.push({ role: "tool", content: result.content, tool_call_id: tc.id });
           emit(onLog, {
             kind: "tool_result",
@@ -266,7 +462,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             content: result.content,
             isError: result.isError,
           });
+
+          // Track repeat calls
+          recentCalls.push(cacheKey);
+          if (recentCalls.length > REPEAT_THRESHOLD) recentCalls.shift();
+          if (recentCalls.length === REPEAT_THRESHOLD && recentCalls.every((s) => s === cacheKey)) {
+            emit(onLog, {
+              kind: "stderr",
+              ts: ts(),
+              text: `[openai-proxy] Tool "${tc.function.name}" called ${REPEAT_THRESHOLD}x with identical args — breaking loop.`,
+            });
+            runError = {
+              message: `Tool "${tc.function.name}" was called ${REPEAT_THRESHOLD} times in a row with identical arguments.`,
+              code: "tool_repeat_loop",
+            };
+            stoppedReason = "repeat_loop";
+            break;
+          }
         }
+        if (stoppedReason === "repeat_loop") break;
         continue;
       }
 
@@ -274,42 +488,79 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       break;
     }
 
-    if (turn >= maxTurns) {
+    if (turn >= maxTurns && stoppedReason !== "repeat_loop") {
       stoppedReason = "max_turns";
       finalText += "\n\n[Stopped after max turns]";
     }
   } catch (err) {
     stoppedReason = "error";
-    finalText = err instanceof Error ? err.message : String(err);
+    const reason = err instanceof Error ? err.message : String(err);
+    finalText = reason;
+    runError = { message: reason, code: "proxy_error" };
     emit(onLog, {
       kind: "stderr",
       ts: ts(),
-      text: `[openai-proxy] Error: ${finalText}`,
+      text: `[openai-proxy] Error: ${reason}`,
     });
   }
 
-  const usage = { inputTokens: 0, outputTokens: 0 };
+  // ----- post-loop: comment + status -----
+  if (hasAuthToken && currentIssueId) {
+    // Post final text as comment
+    if (finalText.trim().length > 0) {
+      try {
+        await addIssueComment(paperclipApiBaseUrl, authToken, currentIssueId, finalText);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] could not post final comment: ${reason}` });
+      }
+    }
+
+    // Update issue status
+    let nextStatus: string | null = null;
+    let statusReason: string | null = null;
+    if (stoppedReason === "completed") {
+      nextStatus = "done";
+    } else if (stoppedReason === "max_turns") {
+      nextStatus = "blocked";
+      statusReason = `Hit max_turns (${maxTurns}) without completing`;
+    } else if (stoppedReason === "repeat_loop" && runError) {
+      nextStatus = "blocked";
+      statusReason = runError.message;
+    } else if (stoppedReason === "error" && runError) {
+      nextStatus = "blocked";
+      statusReason = runError.message;
+    }
+    if (nextStatus) {
+      try {
+        await updateIssueStatus(paperclipApiBaseUrl, authToken, currentIssueId, nextStatus, statusReason ?? undefined);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] could not update final status: ${reason}` });
+      }
+    }
+  }
 
   emit(onLog, {
     kind: "result",
     ts: ts(),
     text: finalText,
-    inputTokens: 0,
-    outputTokens: 0,
+    inputTokens: totalUsage.inputTokens,
+    outputTokens: totalUsage.outputTokens,
     cachedTokens: 0,
     costUsd: 0,
     subtype: stoppedReason,
     isError: stoppedReason === "error",
-    errors: stoppedReason === "error" ? [finalText] : [],
+    errors: runError ? [runError.message] : [],
   });
 
   return {
     exitCode: stoppedReason === "error" ? 1 : 0,
     signal: null,
     timedOut: false,
-    errorMessage: stoppedReason === "error" ? finalText : null,
-    errorCode: stoppedReason === "error" ? "proxy_error" : null,
-    usage,
+    errorMessage: runError ? runError.message : null,
+    errorCode: runError ? runError.code : null,
+    usage: totalUsage,
     model,
     provider: "openai_proxy",
     biller: "openai_proxy",
