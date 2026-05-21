@@ -1,3 +1,5 @@
+import { compressResult } from "./compression.js";
+
 export interface ToolSchema {
   type: "function";
   function: {
@@ -20,7 +22,13 @@ export interface Tool {
 const MAX_RESULT_CHARS = 8000;
 
 function ok(content: string | Record<string, unknown>): ToolExecutionResult {
-  let text = typeof content === "string" ? content : JSON.stringify(content);
+  let text: string;
+  if (typeof content === "string") {
+    text = content;
+  } else {
+    // TOON/RTK compression for objects/arrays before truncation
+    text = compressResult(content);
+  }
   if (text.length > MAX_RESULT_CHARS) {
     text = text.slice(0, MAX_RESULT_CHARS) + `\n...[truncated ${text.length - MAX_RESULT_CHARS} chars]`;
   }
@@ -30,7 +38,8 @@ function ok(content: string | Record<string, unknown>): ToolExecutionResult {
 function fail(message: string, detail?: unknown): ToolExecutionResult {
   const body: Record<string, unknown> = { error: message };
   if (detail !== undefined) body.detail = detail;
-  return { content: JSON.stringify(body), isError: true };
+  // Errors are typically small; RTK still helps on large error objects
+  return { content: compressResult(body), isError: true };
 }
 
 async function safeExec(label: string, fn: () => Promise<unknown>): Promise<ToolExecutionResult> {
