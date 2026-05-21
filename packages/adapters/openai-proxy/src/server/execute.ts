@@ -670,8 +670,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (stoppedReason === "completed") {
       nextStatus = "done";
     } else if (stoppedReason === "max_turns") {
-      nextStatus = "blocked";
-      statusReason = `Hit max_turns (${maxTurns}) without completing`;
+      // Do NOT mark as blocked — the heartbeat simply ran out of turns.
+      // Leave the issue as in_progress so the next heartbeat continues.
+      emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Heartbeat ended after ${maxTurns} turns. Issue remains in_progress for next cycle.` });
     } else if (stoppedReason === "repeat_loop" && runError) {
       nextStatus = "blocked";
       statusReason = runError.message;
