@@ -390,6 +390,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         messages = [systemMsg, ...messages.slice(-Math.floor(HARD_MESSAGE_CAP / 2))];
       }
 
+      // Periodic cache cleanup to prevent memory growth over long runs
+      if (turn % 10 === 0) {
+        const cacheSize = toolResultCache.size;
+        if (cacheSize > 20) {
+          toolResultCache.clear();
+          if (onLog) emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Cleared tool cache (${cacheSize} entries) to free memory` });
+        }
+        if (recentCalls.length > REPEAT_THRESHOLD * 2) {
+          recentCalls.splice(0, recentCalls.length - REPEAT_THRESHOLD);
+        }
+      }
+
       const body: Record<string, unknown> = {
         model,
         messages: messagesToSend,
