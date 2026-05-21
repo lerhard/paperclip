@@ -9,6 +9,7 @@ export const BUILTIN_ADAPTER_TYPES = new Set([
   "cursor",
   "gemini_local",
   "grok_local",
+  "openai_proxy",
   "openclaw_gateway",
   "opencode_local",
   "openrouter",

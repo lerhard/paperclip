@@ -153,6 +153,8 @@ import {
   sessionCodec as openaiProxySessionCodec,
   listSkills as openaiProxyListSkills,
   syncSkills as openaiProxySyncSkills,
+  listModels as listOpenAiProxyModels,
+  refreshModels as refreshOpenAiProxyModels,
 } from "@paperclipai/adapter-openai-proxy/server";
 import {
   agentConfigurationDoc as openaiProxyAgentConfigurationDoc,
@@ -431,6 +433,8 @@ const openaiProxyAdapter: ServerAdapterModule = {
   sessionCodec: openaiProxySessionCodec,
   sessionManagement: getAdapterSessionManagement("openai_proxy") ?? undefined,
   models: openaiProxyModels,
+  listModels: listOpenAiProxyModels,
+  refreshModels: refreshOpenAiProxyModels,
   supportsLocalAgentJwt: false,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",

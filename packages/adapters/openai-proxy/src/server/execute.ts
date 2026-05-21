@@ -47,6 +47,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function emit(
+  onLog: AdapterExecutionContext["onLog"],
+  entry: Record<string, unknown>,
+): void {
+  if (onLog) {
+    onLog("stdout", JSON.stringify(entry) + "\n");
+  }
+}
+
 function asString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
@@ -105,6 +114,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const issueId = context.issueId ?? "";
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx);
 
+  const ts = () => new Date().toISOString();
+
+  emit(onLog, {
+    kind: "init",
+    ts: ts(),
+    model,
+    sessionId: runId,
+  });
+
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -124,6 +142,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     while (turn < maxTurns) {
       turn++;
       if (turn > 1) await sleep(TURN_DELAY_MS);
+
+      emit(onLog, {
+        kind: "system",
+        ts: ts(),
+        text: `[openai-proxy] Turn ${turn}/${maxTurns} — ${toolSchemas.length} tools available`,
+      });
 
       let messagesToSend = messages;
       if (MAX_CONTEXT && messages.length > MAX_CONTEXT + 1) {
@@ -175,6 +199,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const msg = choice.message;
       finalText = msg.content ?? "";
 
+      emit(onLog, {
+        kind: "assistant",
+        ts: ts(),
+        text: msg.content ?? "",
+      });
+
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         messages.push({
           role: "assistant",
@@ -183,6 +213,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         });
 
         for (const tc of msg.tool_calls) {
+          emit(onLog, {
+            kind: "tool_call",
+            ts: ts(),
+            name: tc.function.name,
+            input: tc.function.arguments,
+            toolUseId: tc.id,
+          });
+
           const tool = findTool(tools, tc.function.name);
           let result: { content: string; isError: boolean };
           if (!tool) {
@@ -194,11 +232,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             } catch {
               result = { content: JSON.stringify({ error: "Invalid tool arguments JSON" }), isError: true };
               messages.push({ role: "tool", content: result.content, tool_call_id: tc.id });
+              emit(onLog, {
+                kind: "tool_result",
+                ts: ts(),
+                toolUseId: tc.id,
+                toolName: tc.function.name,
+                content: result.content,
+                isError: result.isError,
+              });
               continue;
             }
             result = await tool.execute(args);
           }
           messages.push({ role: "tool", content: result.content, tool_call_id: tc.id });
+          emit(onLog, {
+            kind: "tool_result",
+            ts: ts(),
+            toolUseId: tc.id,
+            toolName: tc.function.name,
+            content: result.content,
+            isError: result.isError,
+          });
         }
         continue;
       }
@@ -214,12 +268,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   } catch (err) {
     stoppedReason = "error";
     finalText = err instanceof Error ? err.message : String(err);
-    if (onLog) {
-      await onLog("stderr", `[openai-proxy] Error: ${finalText}\n`);
-    }
+    emit(onLog, {
+      kind: "stderr",
+      ts: ts(),
+      text: `[openai-proxy] Error: ${finalText}`,
+    });
   }
 
   const usage = { inputTokens: 0, outputTokens: 0 };
+
+  emit(onLog, {
+    kind: "result",
+    ts: ts(),
+    text: finalText,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    costUsd: 0,
+    subtype: stoppedReason,
+    isError: stoppedReason === "error",
+    errors: stoppedReason === "error" ? [finalText] : [],
+  });
 
   return {
     exitCode: stoppedReason === "error" ? 1 : 0,
