@@ -1,3 +1,5 @@
+import path from "node:path";
+import fs from "node:fs/promises";
 import type {
   AdapterSessionCodec,
   AdapterSkillContext,
@@ -72,27 +74,80 @@ export const sessionCodec: AdapterSessionCodec = {
   },
 };
 
-export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkillSnapshot> {
-  return {
+function defaultSkillsRoot(): string {
+  const home = process.env.HOME || process.env.USERPROFILE || ".";
+  return path.join(home, ".openai-proxy-adapter", "skills");
+}
+
+export async function listSkills(ctx: AdapterSkillContext): Promise<AdapterSkillSnapshot> {
+  const root = process.env.PAPERCLIP_SKILLS_DIR?.trim() || defaultSkillsRoot();
+
+  const rawSync = ctx.config.paperclipSkillSync;
+  const desiredSkills: string[] =
+    typeof rawSync === "object" && rawSync !== null && !Array.isArray(rawSync)
+      ? Array.from(
+          new Set(
+            ((rawSync as Record<string, unknown>).desiredSkills as unknown[])
+              ?.filter((v): v is string => typeof v === "string")
+              .map((s) => s.trim())
+              .filter(Boolean) ?? [],
+          ),
+        )
+      : [];
+
+  const snapshot: AdapterSkillSnapshot = {
     adapterType: "openai_proxy",
-    supported: false,
-    mode: "unsupported",
-    desiredSkills: [],
+    supported: true,
+    mode: "ephemeral",
+    desiredSkills,
     entries: [],
     warnings: [],
   };
+
+  let entries: import("node:fs").Dirent[] = [];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    try {
+      await fs.mkdir(root, { recursive: true });
+    } catch {
+      snapshot.warnings.push(`Skills root ${root} not present.`);
+      return snapshot;
+    }
+  }
+
+  const desiredSet = new Set(desiredSkills);
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const skillDir = path.join(root, entry.name);
+    const skillMd = path.join(skillDir, "SKILL.md");
+    let hasSkillMd = true;
+    try {
+      await fs.access(skillMd);
+    } catch {
+      hasSkillMd = false;
+    }
+    if (!hasSkillMd) continue;
+    snapshot.entries.push({
+      key: entry.name,
+      runtimeName: entry.name,
+      desired: desiredSet.has(entry.name),
+      managed: false,
+      state: "external",
+      origin: "external_unknown",
+      sourcePath: skillDir,
+      targetPath: skillDir,
+    });
+  }
+
+  return snapshot;
 }
 
 export async function syncSkills(
-  _ctx: AdapterSkillContext,
-  _desiredSkills: string[],
+  ctx: AdapterSkillContext,
+  desiredSkills: string[],
 ): Promise<AdapterSkillSnapshot> {
-  return {
-    adapterType: "openai_proxy",
-    supported: false,
-    mode: "unsupported",
-    desiredSkills: [],
-    entries: [],
-    warnings: [],
-  };
+  const snapshot = await listSkills(ctx);
+  snapshot.desiredSkills = desiredSkills;
+  return snapshot;
 }

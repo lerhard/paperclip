@@ -31,4 +31,5 @@ export interface OpenAiProxyConfig {
   maxTokens?: number;
   maxTurns?: number;
   timeoutSec?: number;
+  skillsDir?: string;
 }
