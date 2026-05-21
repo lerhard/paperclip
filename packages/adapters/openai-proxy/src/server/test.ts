@@ -11,33 +11,48 @@ export async function testEnvironment(
   const checks: AdapterEnvironmentCheck[] = [];
   const config = (ctx.config || {}) as unknown as OpenAiProxyConfig;
 
-  if (!config.baseUrl) {
+  const effectiveBaseUrl = config.baseUrl || process.env.OPENAI_PROXY_BASE_URL || "";
+  const effectiveApiKey = config.apiKey || process.env.OPENAI_PROXY_API_KEY || "";
+
+  if (!effectiveBaseUrl) {
     checks.push({
       code: "openai_proxy_base_url_missing",
       level: "error",
       message: "baseUrl is required",
-      hint: "Set adapterConfig.baseUrl to your OpenAI-compatible API endpoint.",
+      hint: "Set adapterConfig.baseUrl or OPENAI_PROXY_BASE_URL env var.",
     });
-  } else {
+  } else if (config.baseUrl) {
     checks.push({
       code: "openai_proxy_base_url_present",
       level: "info",
-      message: `Base URL: ${config.baseUrl}`,
+      message: `Base URL: ${effectiveBaseUrl}`,
+    });
+  } else {
+    checks.push({
+      code: "openai_proxy_base_url_from_env",
+      level: "info",
+      message: `Base URL from env: ${effectiveBaseUrl}`,
     });
   }
 
-  if (!config.apiKey) {
+  if (!effectiveApiKey) {
     checks.push({
       code: "openai_proxy_api_key_missing",
       level: "error",
       message: "apiKey is required",
-      hint: "Set adapterConfig.apiKey to your proxy bearer token.",
+      hint: "Set adapterConfig.apiKey or OPENAI_PROXY_API_KEY env var.",
     });
-  } else {
+  } else if (config.apiKey) {
     checks.push({
       code: "openai_proxy_api_key_present",
       level: "info",
       message: "API key is configured",
+    });
+  } else {
+    checks.push({
+      code: "openai_proxy_api_key_from_env",
+      level: "info",
+      message: "API key from env",
     });
   }
 
@@ -56,11 +71,11 @@ export async function testEnvironment(
     });
   }
 
-  if (config.baseUrl && config.apiKey) {
+  if (effectiveBaseUrl && effectiveApiKey) {
     try {
-      const modelsUrl = config.baseUrl.replace(/\/$/, "") + "/models";
+      const modelsUrl = effectiveBaseUrl.replace(/\/$/, "") + "/models";
       const res = await fetch(modelsUrl, {
-        headers: { Authorization: `Bearer ${config.apiKey}` },
+        headers: { Authorization: `Bearer ${effectiveApiKey}` },
         signal: AbortSignal.timeout(10000),
       });
       if (res.ok) {

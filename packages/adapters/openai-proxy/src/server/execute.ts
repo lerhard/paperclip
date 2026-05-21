@@ -66,17 +66,17 @@ function asNumber(value: unknown, fallback: number): number {
 }
 
 function resolveApiKey(config: OpenAiProxyConfig): string {
-  const key = config.apiKey || "";
+  const key = config.apiKey || process.env.OPENAI_PROXY_API_KEY || "";
   if (!key) {
-    throw new Error("apiKey is required for openai_proxy adapter.");
+    throw new Error("apiKey is required for openai_proxy adapter. Set adapterConfig.apiKey or OPENAI_PROXY_API_KEY env var.");
   }
   return key;
 }
 
 function resolveBaseUrl(config: OpenAiProxyConfig): string {
-  const url = config.baseUrl || "";
+  const url = config.baseUrl || process.env.OPENAI_PROXY_BASE_URL || "";
   if (!url) {
-    throw new Error("baseUrl is required for openai_proxy adapter.");
+    throw new Error("baseUrl is required for openai_proxy adapter. Set adapterConfig.baseUrl or OPENAI_PROXY_BASE_URL env var.");
   }
   return url.replace(/\/$/, "");
 }
