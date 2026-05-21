@@ -120,6 +120,7 @@ function buildConfig(values: CreateConfigValues): Record<string, unknown> {
   if (v.maxTokens !== undefined) config.maxTokens = v.maxTokens;
   if (v.temperature !== undefined) config.temperature = v.temperature;
   if (v.systemPrompt !== undefined) config.systemPrompt = v.systemPrompt;
+  if (v.skillsDir !== undefined) config.skillsDir = v.skillsDir;
   if (values.instructionsFilePath) config.instructionsFilePath = values.instructionsFilePath;
   return config;
 }

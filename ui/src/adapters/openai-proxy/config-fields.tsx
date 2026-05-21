@@ -149,6 +149,23 @@ export function OpenAiProxyConfigFields({
           placeholder="You are a helpful assistant..."
         />
       </Field>
+      <Field label="Skills Directory" hint="Path to skills folder (optional, loads SKILL.md files)">
+        <DraftInput
+          value={
+            isCreate
+              ? v?.skillsDir ?? ""
+              : eff("adapterConfig", "skillsDir", String(c?.skillsDir ?? ""))
+          }
+          onCommit={(val) =>
+            isCreate
+              ? set!({ skillsDir: val || undefined } as any)
+              : mark("adapterConfig", "skillsDir", val || undefined)
+          }
+          immediate
+          className={inputClass}
+          placeholder="/path/to/skills or ~/.openai-proxy-adapter/skills"
+        />
+      </Field>
     </>
   );
 }

@@ -5,6 +5,7 @@ import type {
 import { renderPaperclipWakePrompt } from "@paperclipai/adapter-utils/server-utils";
 import type { OpenAiProxyConfig } from "../index.js";
 import { buildTools, buildToolSchemas, findTool } from "./tools.js";
+import { loadSkills, renderSkillsForPrompt } from "./skills.js";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -332,8 +333,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const currentIssueId = (context.issueId as string | null | undefined) ?? null;
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx);
-
   const ts = () => new Date().toISOString();
+
+  // Load skills
+  let skillsText = "";
+  try {
+    const skills = await loadSkills({ agentConfig: config as unknown as Record<string, unknown>, onLog });
+    if (skills.length > 0) {
+      skillsText = "\n\n" + renderSkillsForPrompt(skills);
+      emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Loaded ${skills.length} skill(s): ${skills.map((s) => s.name).join(", ")}` });
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] Skill loading failed: ${reason}` });
+  }
 
   emit(onLog, {
     kind: "init",
@@ -354,8 +367,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     {
       role: "system",
       content: currentIssueId
-        ? `${systemPrompt}\n\nYou are working on issue ${currentIssueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
-        : `${systemPrompt}\n\n${structuredWakePrompt}`,
+        ? `${systemPrompt}${skillsText}\n\nYou are working on issue ${currentIssueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
+        : `${systemPrompt}${skillsText}\n\n${structuredWakePrompt}`,
     },
   ];
 
@@ -443,9 +456,35 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         }
       }
 
+      // Filter out empty content messages — Anthropic/Claude rejects them with:
+      // "text content blocks must be non-empty"
+      const cleanMessages = messagesToSend.filter((m) => {
+        if (m.role === "system") return true; // always keep system
+        if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) return true; // keep tool calls
+        if (typeof m.content === "string" && m.content.trim().length > 0) return true;
+        if (m.content === null && m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) return true;
+        return false; // skip empty
+      });
+      // Ensure no two consecutive user messages, and no two consecutive assistant messages
+      const dedupedMessages: ChatMessage[] = [];
+      for (const m of cleanMessages) {
+        const last = dedupedMessages[dedupedMessages.length - 1];
+        if (last && last.role === m.role) {
+          // Merge same-role messages: for assistant with tool_calls, keep tool_calls
+          if (m.role === "assistant" && m.tool_calls) {
+            last.tool_calls = [...(last.tool_calls ?? []), ...m.tool_calls];
+            if (m.content) last.content = (last.content ?? "") + "\n" + m.content;
+          } else if (typeof m.content === "string") {
+            last.content = (typeof last.content === "string" ? last.content : "") + "\n" + m.content;
+          }
+          continue;
+        }
+        dedupedMessages.push({ ...m });
+      }
+
       const body: Record<string, unknown> = {
         model,
-        messages: messagesToSend,
+        messages: dedupedMessages,
         max_tokens: maxTokens,
         temperature,
       };
@@ -477,10 +516,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const msg = choice.message;
       finalText = msg.content ?? "";
 
-      // Emit reasoning/thinking if present (some proxies expose it in content or a reasoning field)
-      const reasoning = (msg as any).reasoning || "";
-      if (reasoning) {
-        emit(onLog, { kind: "thinking", ts: ts(), text: reasoning, delta: false });
+      // Emit reasoning/thinking if present
+      // OpenAI format: msg.reasoning (some proxies add this field)
+      // Anthropic via OpenAI proxy: reasoning_content (Claude extended thinking)
+      const reasoning = (msg as any).reasoning || (msg as any).reasoning_content || "";
+      if (reasoning && typeof reasoning === "string" && reasoning.trim().length > 0) {
+        emit(onLog, { kind: "thinking", ts: ts(), text: reasoning.trim(), delta: false });
+      } else if (msg.content && msg.content.trim().length > 0 && msg.content.length > 200 && !msg.tool_calls) {
+        // Heuristic: if content is long and looks like reasoning (no tool calls), emit first part as thinking
+        const firstSentence = msg.content.split(/\n|\./).slice(0, 3).join(".").trim();
+        if (firstSentence.length > 50 && firstSentence.length < 500) {
+          emit(onLog, { kind: "thinking", ts: ts(), text: firstSentence, delta: false });
+        }
       }
 
       emit(onLog, {
