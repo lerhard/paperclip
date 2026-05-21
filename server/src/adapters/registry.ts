@@ -435,7 +435,7 @@ const openaiProxyAdapter: ServerAdapterModule = {
   models: openaiProxyModels,
   listModels: listOpenAiProxyModels,
   refreshModels: refreshOpenAiProxyModels,
-  supportsLocalAgentJwt: false,
+  supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
