@@ -7,22 +7,40 @@ import type {
 export { execute } from "./execute.js";
 export { testEnvironment } from "./test.js";
 
-async function fetchProxyModels(): Promise<{ id: string; label: string }[]> {
-  const baseUrl = (process.env.OPENAI_PROXY_BASE_URL || "").replace(/\/$/, "");
-  const apiKey = process.env.OPENAI_PROXY_API_KEY || "";
-  if (!baseUrl || !apiKey) return [];
+const POPULAR_OPENAI_MODELS = [
+  { id: "gpt-4o", label: "GPT-4o" },
+  { id: "gpt-4o-mini", label: "GPT-4o Mini" },
+  { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
+  { id: "gpt-4", label: "GPT-4" },
+  { id: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
+  { id: "o1-preview", label: "o1 Preview" },
+  { id: "o1-mini", label: "o1 Mini" },
+  { id: "o3-mini", label: "o3 Mini" },
+];
+
+async function fetchProxyModels(opts?: { baseUrl?: string; apiKey?: string }): Promise<{ id: string; label: string }[]> {
+  const baseUrl = (opts?.baseUrl || process.env.OPENAI_PROXY_BASE_URL || "").replace(/\/$/, "");
+  const apiKey = opts?.apiKey || process.env.OPENAI_PROXY_API_KEY || "";
+  if (!baseUrl || !apiKey) {
+    // No credentials available — return popular defaults so the UI model picker works
+    return POPULAR_OPENAI_MODELS;
+  }
 
   try {
     const res = await fetch(`${baseUrl}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      // API returned error — still return defaults so the user isn't blocked
+      return POPULAR_OPENAI_MODELS;
+    }
     const data = (await res.json()) as { data?: Array<{ id: string }> };
     const models = Array.isArray(data.data) ? data.data : [];
+    if (models.length === 0) return POPULAR_OPENAI_MODELS;
     return models.map((m) => ({ id: m.id, label: m.id }));
   } catch {
-    return [];
+    return POPULAR_OPENAI_MODELS;
   }
 }
 
