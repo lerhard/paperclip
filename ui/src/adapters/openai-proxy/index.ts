@@ -116,6 +116,7 @@ function buildConfig(values: CreateConfigValues): Record<string, unknown> {
   const v = values as any;
   if (v.baseUrl !== undefined) config.baseUrl = v.baseUrl;
   if (v.apiKey !== undefined) config.apiKey = v.apiKey;
+  if (v.maxTurns !== undefined) config.maxTurns = v.maxTurns;
   if (v.maxTokens !== undefined) config.maxTokens = v.maxTokens;
   if (v.temperature !== undefined) config.temperature = v.temperature;
   if (v.systemPrompt !== undefined) config.systemPrompt = v.systemPrompt;

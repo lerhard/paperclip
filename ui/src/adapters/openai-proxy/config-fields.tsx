@@ -72,6 +72,83 @@ export function OpenAiProxyConfigFields({
           placeholder="gpt-4"
         />
       </Field>
+      <Field label="Max Turns" hint="Max tool-loop iterations (default: 50)">
+        <DraftInput
+          type="number"
+          value={
+            isCreate
+              ? String(v?.maxTurns ?? "")
+              : eff("adapterConfig", "maxTurns", String(c?.maxTurns ?? ""))
+          }
+          onCommit={(val) =>
+            isCreate
+              ? set!({ maxTurns: val ? parseInt(val, 10) : undefined } as any)
+              : mark("adapterConfig", "maxTurns", val ? parseInt(val, 10) : undefined)
+          }
+          immediate
+          className={inputClass}
+          placeholder="50"
+          min="1"
+          max="100"
+        />
+      </Field>
+      <Field label="Max Tokens" hint="Max completion tokens (default: 2048)">
+        <DraftInput
+          type="number"
+          value={
+            isCreate
+              ? String(v?.maxTokens ?? "")
+              : eff("adapterConfig", "maxTokens", String(c?.maxTokens ?? ""))
+          }
+          onCommit={(val) =>
+            isCreate
+              ? set!({ maxTokens: val ? parseInt(val, 10) : undefined } as any)
+              : mark("adapterConfig", "maxTokens", val ? parseInt(val, 10) : undefined)
+          }
+          immediate
+          className={inputClass}
+          placeholder="2048"
+          min="1"
+        />
+      </Field>
+      <Field label="Temperature" hint="Sampling temperature 0-2 (default: 0.7)">
+        <DraftInput
+          type="number"
+          value={
+            isCreate
+              ? String(v?.temperature ?? "")
+              : eff("adapterConfig", "temperature", String(c?.temperature ?? ""))
+          }
+          onCommit={(val) =>
+            isCreate
+              ? set!({ temperature: val ? parseFloat(val) : undefined } as any)
+              : mark("adapterConfig", "temperature", val ? parseFloat(val) : undefined)
+          }
+          immediate
+          className={inputClass}
+          placeholder="0.7"
+          min="0"
+          max="2"
+          step="0.1"
+        />
+      </Field>
+      <Field label="System Prompt" hint="Custom system prompt (optional)">
+        <DraftInput
+          value={
+            isCreate
+              ? v?.systemPrompt ?? ""
+              : eff("adapterConfig", "systemPrompt", String(c?.systemPrompt ?? ""))
+          }
+          onCommit={(val) =>
+            isCreate
+              ? set!({ systemPrompt: val || undefined } as any)
+              : mark("adapterConfig", "systemPrompt", val || undefined)
+          }
+          immediate
+          className={inputClass}
+          placeholder="You are a helpful assistant..."
+        />
+      </Field>
     </>
   );
 }

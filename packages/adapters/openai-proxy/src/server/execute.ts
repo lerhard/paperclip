@@ -38,10 +38,23 @@ interface ChatCompletionResponse {
   };
 }
 
-const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done.";
-const TURN_DELAY_MS = 1200;
-const DEFAULT_MAX_TURNS = 12;
-const DEFAULT_MAX_CONTEXT = 10;
+const DEFAULT_SYSTEM_PROMPT = `You are a Paperclip AI agent. Your job is to complete the assigned issue by any means necessary.
+
+Workflow:
+1. Analyze the issue context and determine what needs to be done.
+2. Use available tools (shell commands, file reads/writes, search, paperclip_api) to investigate and make progress.
+3. When you finish, set status to done and provide a summary of what you accomplished.
+4. If you get stuck, add a comment explaining the blocker and set status to blocked.
+
+Rules:
+- Always prefer making changes over just describing them.
+- Read files before editing them.
+- Run shell commands to verify your changes work.
+- Use paperclip_api to update issue status and add comments.
+- End with a clear summary. Status: done + summary.`;
+const TURN_DELAY_MS = 800;
+const DEFAULT_MAX_TURNS = 50;
+const DEFAULT_MAX_CONTEXT = 20;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -296,7 +309,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
   }
 
-  const messages: ChatMessage[] = [
+  let messages: ChatMessage[] = [
     {
       role: "system",
       content: currentIssueId
@@ -343,6 +356,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // Tool result cache: avoid re-executing identical calls across turns
   const toolResultCache = new Map<string, { content: string; isError: boolean }>();
+  // Hard cap: if messages grow beyond this, aggressively truncate to prevent memory explosion
+  const HARD_MESSAGE_CAP = 80;
 
   try {
     while (turn < maxTurns) {
@@ -355,14 +370,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         text: `[openai-proxy] Turn ${turn}/${maxTurns} — ${toolSchemas.length} tools available`,
       });
 
+      // Aggressive truncation to prevent memory leak / context explosion
       let messagesToSend = messages;
-      if (MAX_CONTEXT && messages.length > MAX_CONTEXT + 1) {
+      const effectiveMax = Math.min(MAX_CONTEXT, Math.floor(HARD_MESSAGE_CAP / 2));
+      if (messages.length > effectiveMax + 1) {
         const systemMsg = messages[0];
-        let startIndex = messages.length - MAX_CONTEXT;
+        let startIndex = messages.length - effectiveMax;
         while (startIndex > 1 && messages[startIndex].role === "tool") {
           startIndex--;
         }
         messagesToSend = [systemMsg, ...messages.slice(startIndex)];
+        if (turn === 1 || turn % 5 === 0) {
+          emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Context truncated: ${messages.length} → ${messagesToSend.length} messages` });
+        }
+      }
+      // Also enforce absolute hard cap on the live messages array
+      if (messages.length > HARD_MESSAGE_CAP) {
+        const systemMsg = messages[0];
+        messages = [systemMsg, ...messages.slice(-Math.floor(HARD_MESSAGE_CAP / 2))];
       }
 
       const body: Record<string, unknown> = {
@@ -398,6 +423,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       const msg = choice.message;
       finalText = msg.content ?? "";
+
+      // Emit reasoning/thinking if present (some proxies expose it in content or a reasoning field)
+      const reasoning = (msg as any).reasoning || "";
+      if (reasoning) {
+        emit(onLog, { kind: "thinking", ts: ts(), text: reasoning, delta: false });
+      }
 
       emit(onLog, {
         kind: "assistant",
