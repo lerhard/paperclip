@@ -146,7 +146,7 @@ async function paperclipFetchWithRetry(
   throw new Error(`All ${maxRetries + 1} attempts failed for ${opts.label}: ${lastErr}`);
 }
 
-async function checkoutIssue(apiBaseUrl: string, authToken: string, issueId: string, runId: string, onLog?: AdapterExecutionContext["onLog"]): Promise<void> {
+async function checkoutIssue(apiBaseUrl: string, authToken: string, issueId: string, agentId: string, onLog?: AdapterExecutionContext["onLog"]): Promise<void> {
   const res = await paperclipFetchWithRetry(
     `${apiBaseUrl}/api/issues/${issueId}/checkout`,
     {
@@ -155,7 +155,10 @@ async function checkoutIssue(apiBaseUrl: string, authToken: string, issueId: str
         Authorization: `Bearer ${authToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ runId }),
+      body: JSON.stringify({
+        agentId,
+        expectedStatuses: ["backlog", "todo", "in_progress", "in_review", "blocked"],
+      }),
     },
     { label: "checkoutIssue", onLog },
   );
@@ -378,7 +381,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let issueLocked = false;
   if (hasAuthToken && currentIssueId) {
     try {
-      await checkoutIssue(paperclipApiBaseUrl, authToken, currentIssueId, runId, onLog);
+      await checkoutIssue(paperclipApiBaseUrl, authToken, currentIssueId, agent.id, onLog);
       issueLocked = true;
       emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Checked out issue ${currentIssueId}` });
     } catch (err) {
