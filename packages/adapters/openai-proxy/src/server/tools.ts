@@ -248,7 +248,6 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
                 "update_issue_status",
                 "add_comment",
                 "list_comments",
-                "list_child_issues",
                 "list_issues",
                 "create_sub_issue",
                 "hire_agent",
@@ -286,8 +285,9 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
 
       switch (action) {
         case "get_issue": {
-          if (!issueId) return fail("issue_id required");
-          return safeExec("get_issue", () => callApi("GET", `/api/issues/${issueId}`));
+          const targetIssueId = issueId || ctx.currentIssueId;
+          if (!targetIssueId) return fail("issue_id required (no current issue available)");
+          return safeExec("get_issue", () => callApi("GET", `/api/issues/${targetIssueId}`));
         }
         case "update_issue_status": {
           if (!issueId) return fail("issue_id required");
@@ -306,10 +306,6 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
         case "list_comments": {
           if (!issueId) return fail("issue_id required");
           return safeExec("list_comments", () => callApi("GET", `/api/issues/${issueId}/comments`));
-        }
-        case "list_child_issues": {
-          if (!issueId) return fail("issue_id required");
-          return safeExec("list_children", () => callApi("GET", `/api/issues/${issueId}/children`));
         }
         case "list_issues": {
           const query: Record<string, string> = {};
