@@ -152,8 +152,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       let messagesToSend = messages;
       if (MAX_CONTEXT && messages.length > MAX_CONTEXT + 1) {
         const systemMsg = messages[0];
-        const recent = messages.slice(-MAX_CONTEXT);
-        messagesToSend = [systemMsg, ...recent];
+        let startIndex = messages.length - MAX_CONTEXT;
+        // Never start the slice with a "tool" message — its parent "assistant"
+        // (which carries the matching tool_calls) might have been truncated out.
+        while (startIndex > 1 && messages[startIndex].role === "tool") {
+          startIndex--;
+        }
+        messagesToSend = [systemMsg, ...messages.slice(startIndex)];
       }
 
       const body: Record<string, unknown> = {
