@@ -458,19 +458,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       // Filter out empty content messages — Anthropic/Claude rejects them with:
       // "text content blocks must be non-empty"
+      // NEVER filter role:tool messages; each has a unique tool_call_id the model needs.
       const cleanMessages = messagesToSend.filter((m) => {
         if (m.role === "system") return true; // always keep system
+        if (m.role === "tool") return true; // always keep tool results — each has a unique tool_call_id
         if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) return true; // keep tool calls
         if (typeof m.content === "string" && m.content.trim().length > 0) return true;
         if (m.content === null && m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) return true;
         return false; // skip empty
       });
-      // Ensure no two consecutive user messages, and no two consecutive assistant messages
+      // Merge consecutive same-role messages, but NEVER merge tool messages
+      // because each has a distinct tool_call_id required by the model.
       const dedupedMessages: ChatMessage[] = [];
       for (const m of cleanMessages) {
         const last = dedupedMessages[dedupedMessages.length - 1];
-        if (last && last.role === m.role) {
-          // Merge same-role messages: for assistant with tool_calls, keep tool_calls
+        if (last && last.role === m.role && m.role !== "tool") {
           if (m.role === "assistant" && m.tool_calls) {
             last.tool_calls = [...(last.tool_calls ?? []), ...m.tool_calls];
             if (m.content) last.content = (last.content ?? "") + "\n" + m.content;
