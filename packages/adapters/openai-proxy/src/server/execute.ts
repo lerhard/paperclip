@@ -81,6 +81,14 @@ function resolveBaseUrl(config: OpenAiProxyConfig): string {
   return url.replace(/\/$/, "");
 }
 
+function resolvePaperclipApiBaseUrl(context: Record<string, unknown>): string {
+  const explicit = (context.paperclipApiBaseUrl as string | undefined) ?? "";
+  if (explicit) return explicit.replace(/\/$/, "");
+  const fromEnv = process.env.PAPERCLIP_API_URL;
+  if (fromEnv && fromEnv.trim().length > 0) return fromEnv.replace(/\/$/, "");
+  return "http://localhost:3100";
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { config, context, onLog, agent, runId, authToken } = ctx;
   const proxyConfig = (config ?? {}) as unknown as OpenAiProxyConfig;
@@ -104,7 +112,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     agentId: agent.id,
     companyId: agent.companyId,
     currentIssueId: (context.issueId as string | null | undefined) ?? null,
-    apiBaseUrl: (context.paperclipApiBaseUrl as string | undefined) ?? "",
+    apiBaseUrl: resolvePaperclipApiBaseUrl(context),
     apiKey: (authToken as string | null) ?? "",
     runId,
   });
