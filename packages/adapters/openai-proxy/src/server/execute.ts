@@ -376,6 +376,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   ];
 
   const MAX_CONTEXT = asNumber((config as any).maxContextMessages, DEFAULT_MAX_CONTEXT);
+  let totalUsage = { inputTokens: 0, outputTokens: 0 };
 
   // ----- issue checkout (same pattern as OpenRouter) -----
   let issueLocked = false;
@@ -386,6 +387,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Checked out issue ${currentIssueId}` });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
+      const isConflict = reason.includes("409") || reason.includes("checked out by another");
+      if (isConflict) {
+        emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] checkout conflict: ${reason}. Issue is already assigned to another agent. Stopping.` });
+        return {
+          exitCode: 1,
+          signal: null,
+          timedOut: false,
+          errorMessage: `Issue ${currentIssueId} is already checked out by another agent. Cannot proceed.`,
+          errorCode: "checkout_conflict",
+          usage: totalUsage,
+        };
+      }
       emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] checkout failed: ${reason}. Continuing — heartbeat may have pre-locked.` });
       issueLocked = true; // optimistic: let writes fail at the API level if truly locked
     }
@@ -405,7 +418,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
   let runError: { message: string; code: string } | null = null;
   let turn = 0;
-  let totalUsage = { inputTokens: 0, outputTokens: 0 };
 
   // Loop-detection: same tool + same args 3x in a row = break
   const recentCalls: string[] = [];
