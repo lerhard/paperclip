@@ -263,12 +263,15 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
             description: { type: "string", description: "Description for create_sub_issue" },
             assignee_agent_id: { type: "string", description: "Assignee for create_sub_issue" },
             priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
-            name: { type: "string", description: "Agent name for hire_agent" },
-            role: { type: "string", description: "Agent role for hire_agent" },
-            mission: { type: "string", description: "Agent mission for hire_agent" },
+            name: { type: "string", description: "Agent display name for hire_agent (e.g. 'Security Engineer')" },
+            role: { type: "string", description: "Agent role for hire_agent (e.g. 'security', 'backend', 'frontend', 'devops')" },
+            agent_title: { type: "string", description: "Agent job title for hire_agent (e.g. 'Security Engineer / AppSec')" },
+            icon: { type: "string", description: "Agent icon name for hire_agent (e.g. 'shield', 'code', 'layout', 'server')" },
+            capabilities: { type: "string", description: "Agent capabilities/responsibilities description for hire_agent" },
             adapter_type: { type: "string", description: "Adapter type for hire_agent. Default: openai_proxy" },
             model: { type: "string", description: "Model for hire_agent" },
-            reports_to_agent_id: { type: "string", description: "Manager id for hire_agent" },
+            reports_to_agent_id: { type: "string", description: "Manager agent id for hire_agent" },
+            desired_skills: { type: "array", items: { type: "string" }, description: "Desired skills for hire_agent" },
             approval_type: { type: "string", enum: ["hire_agent", "approve_ceo_strategy", "budget_override_required"] },
             summary: { type: "string", description: "Approval summary" },
             payload: { type: "object", description: "Approval payload" },
@@ -329,19 +332,24 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
         case "hire_agent": {
           const name = asString(args.name);
           const role = asString(args.role);
-          const mission = asString(args.mission);
+          const capabilities = asString(args.capabilities) || asString(args.mission);
           if (!name) return fail("name required");
           if (!role) return fail("role required");
-          if (!mission) return fail("mission required");
+          const adapterConfig: Record<string, unknown> = {};
+          if (args.model) adapterConfig.model = args.model;
           const payload: Record<string, unknown> = {
             name,
             role,
-            mission,
+            title: asString(args.agent_title) || undefined,
+            icon: asString(args.icon) || undefined,
+            capabilities: capabilities || undefined,
             adapterType: args.adapter_type ?? "openai_proxy",
-            model: args.model,
-            reportsToAgentId: args.reports_to_agent_id,
-            requestedByAgentId: ctx.agentId,
+            adapterConfig: Object.keys(adapterConfig).length > 0 ? adapterConfig : undefined,
+            reportsTo: asString(args.reports_to_agent_id) || undefined,
           };
+          if (Array.isArray(args.desired_skills) && args.desired_skills.length > 0) {
+            payload.desiredSkills = args.desired_skills.map((s: unknown) => String(s));
+          }
           return safeExec("hire_agent", () => callApi("POST", `/api/companies/${ctx.companyId}/agents`, payload));
         }
         case "list_agents": {
