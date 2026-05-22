@@ -675,8 +675,9 @@ export async function startServer(): Promise<StartedServer> {
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
+    // Use a 5-minute threshold to avoid false positives for API-based adapters.
     void heartbeat
-      .reapOrphanedRuns()
+      .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
       .then(() => heartbeat.promoteDueScheduledRetries())
       .then(async (promotion) => {
         await heartbeat.resumeQueuedRuns();

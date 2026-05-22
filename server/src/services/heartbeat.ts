@@ -6612,6 +6612,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         continue;
       }
 
+      // For non-local adapters (API-based like openai_proxy/openrouter), we cannot verify
+      // process liveness. Only treat as process_lost if the run is stale enough.
+      if (!tracksLocalChild && staleThresholdMs > 0) {
+        const refTime = run.updatedAt ? new Date(run.updatedAt).getTime() : 0;
+        if (now.getTime() - refTime < staleThresholdMs) {
+          // Run is still fresh; skip to avoid false positive on server restart.
+          continue;
+        }
+      }
+
       let descendantOnlyCleanup = false;
       if (processGroupAlive) {
         descendantOnlyCleanup = true;
