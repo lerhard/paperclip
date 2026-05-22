@@ -259,31 +259,41 @@ function hireAgentTool(ctx: BuildToolsContext): Tool {
         parameters: {
           type: "object",
           properties: {
-            name: { type: "string" },
-            role: { type: "string", description: "Job title." },
-            mission: { type: "string", description: "Agent mission." },
+            name: { type: "string", description: "Agent display name (e.g. 'Security Engineer')" },
+            role: { type: "string", description: "Agent role (e.g. 'security', 'backend', 'frontend')" },
+            title: { type: "string", description: "Agent job title (e.g. 'Security Engineer / AppSec')" },
+            icon: { type: "string", description: "Agent icon name (e.g. 'shield', 'code', 'layout')" },
+            capabilities: { type: "string", description: "Agent capabilities/responsibilities description" },
+            mission: { type: "string", description: "Agent mission (mapped to capabilities)" },
             adapter_type: {
               type: "string",
               description: "Adapter type.",
               default: "openrouter",
             },
             model: { type: "string", description: "Model id." },
-            reports_to_agent_id: { type: "string", description: "Manager id." },
+            reports_to_agent_id: { type: "string", description: "Manager agent id." },
+            desired_skills: { type: "array", items: { type: "string" }, description: "Desired skills for the agent" },
           },
-          required: ["name", "role", "mission"],
+          required: ["name", "role"],
         },
       },
     },
     execute: async (args) => {
+      const adapterConfig: Record<string, unknown> = {};
+      if (args.model) adapterConfig.model = args.model;
       const payload: Record<string, unknown> = {
         name: args.name,
         role: args.role,
-        mission: args.mission,
+        title: asString(args.title) || undefined,
+        icon: asString(args.icon) || undefined,
+        capabilities: asString(args.capabilities) || asString(args.mission) || undefined,
         adapterType: args.adapter_type ?? "openrouter",
-        model: args.model,
-        reportsToAgentId: args.reports_to_agent_id,
-        requestedByAgentId: ctx.agentId,
+        adapterConfig: Object.keys(adapterConfig).length > 0 ? adapterConfig : undefined,
+        reportsTo: asString(args.reports_to_agent_id) || undefined,
       };
+      if (Array.isArray(args.desired_skills) && args.desired_skills.length > 0) {
+        payload.desiredSkills = args.desired_skills.map((s: unknown) => String(s));
+      }
 
       if (ctx.autoApprove) {
         return safeCall("hire_agent", () => ctx.api.hireAgent(ctx.companyId, payload));

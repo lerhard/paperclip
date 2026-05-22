@@ -897,8 +897,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (stoppedReason === "completed") {
       nextStatus = "done";
     } else if (stoppedReason === "max_turns") {
-      nextStatus = "blocked";
-      statusReason = `Hit max_turns (${maxTurns}) without completing`;
+      // Do NOT mark as blocked — heartbeat simply ran out of turns.
+      // Leave the issue as-is so the next heartbeat can continue.
+      await emitSystem(onLog, `Heartbeat ended after ${maxTurns} turns. Issue remains open for next cycle.`);
     } else if (stoppedReason === "repeat_loop" && runError) {
       nextStatus = "blocked";
       statusReason = runError.message;
@@ -959,6 +960,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionParams.openrouterRateLimits = rateLimits;
   }
 
+  const isMaxTurns = stoppedReason === "max_turns";
   if (stoppedReason === "error" && runError) {
     return {
       exitCode: 1,
@@ -979,9 +981,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   return {
-    exitCode: 0,
+    exitCode: isMaxTurns ? 1 : 0,
     signal: null,
     timedOut: false,
+    errorMessage: isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
+    errorCode: isMaxTurns ? "max_turns_exhausted" : null,
+    errorFamily: isMaxTurns ? "transient_upstream" : null,
+    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : null,
     usage: totalUsage,
     model,
     provider: "openrouter",
