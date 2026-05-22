@@ -705,6 +705,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         finalAssistantText = text;
       }
 
+      // Preserve reasoning in context so the model can continue its thought process across turns
+      const contextContent = reasoning && reasoning.trim().length > 0
+        ? `${reasoning.trim()}\n\n${text}`
+        : text;
+
       // No tool calls => model is done. Early-exit if text clearly signals completion.
       if (toolCalls.length === 0) {
         stoppedReason = "completed";
@@ -732,7 +737,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       // Add the assistant message (with tool_calls) so the model sees its own request.
       messages.push({
         role: "assistant",
-        content: text,
+        content: contextContent,
         tool_calls: toolCalls.map((tc) => ({
           id: tc.id,
           type: "function",

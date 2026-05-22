@@ -183,9 +183,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       totalOutputTokens += data.usage.completion_tokens ?? 0;
     }
 
+    // Preserve reasoning in context so the model can continue its thought process across turns
+    const reasoningContent = (message as Record<string, unknown> | undefined)?.reasoning_content as string | undefined;
+    const assistantContent = message?.content || "";
+    const contextContent = reasoningContent && reasoningContent.trim().length > 0
+      ? `${reasoningContent.trim()}\n\n${assistantContent}`
+      : assistantContent;
+
     messages.push({
       role: "assistant",
-      content: message?.content || "",
+      content: contextContent,
       tool_calls: message?.tool_calls,
     });
 

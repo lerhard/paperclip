@@ -555,12 +555,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         text: cleanedContent,
       });
 
+      // Preserve reasoning in context so the model can continue its thought process across turns
+      const contextContent = reasoning && typeof reasoning === "string" && reasoning.trim().length > 0
+        ? `${reasoning.trim()}\n\n${cleanedContent}`
+        : cleanedContent;
+
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         // OpenAI spec: content should be null (or empty) when tool_calls are present
-        // Use cleanedContent if it exists, otherwise null
+        // Preserve reasoning in content so the model sees its own reasoning across turns
         messages.push({
           role: "assistant",
-          content: cleanedContent || null,
+          content: contextContent || null,
           tool_calls: msg.tool_calls,
         });
 
@@ -635,7 +640,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         continue;
       }
 
-      messages.push({ role: "assistant", content: cleanedContent || "" });
+      messages.push({ role: "assistant", content: contextContent || "" });
       break;
     }
 
