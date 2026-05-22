@@ -706,12 +706,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     errors: runError ? [runError.message] : [],
   });
 
+  const isMaxTurns = stoppedReason === "max_turns";
   return {
-    exitCode: stoppedReason === "error" ? 1 : 0,
+    exitCode: stoppedReason === "error" || isMaxTurns ? 1 : 0,
     signal: null,
     timedOut: false,
-    errorMessage: runError ? runError.message : null,
-    errorCode: runError ? runError.code : null,
+    errorMessage: runError ? runError.message : isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
+    errorCode: runError ? runError.code : isMaxTurns ? "max_turns_exhausted" : null,
+    errorFamily: isMaxTurns ? "transient_upstream" : null,
+    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : undefined,
     usage: totalUsage,
     model,
     provider: "openai_proxy",
