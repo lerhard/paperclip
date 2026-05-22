@@ -531,7 +531,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
 
       const msg = choice.message;
-      finalText = msg.content ?? "";
+      // Some proxies/models emit a placeholder when reasoning is not available; strip it.
+      const cleanedContent = (msg.content ?? "").replace(/\[reasoning unavailable\]/gi, "").trim();
+      finalText = cleanedContent;
 
       // Emit reasoning/thinking if present
       // OpenAI format: msg.reasoning (some proxies add this field)
@@ -539,9 +541,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const reasoning = (msg as any).reasoning || (msg as any).reasoning_content || "";
       if (reasoning && typeof reasoning === "string" && reasoning.trim().length > 0) {
         emit(onLog, { kind: "thinking", ts: ts(), text: reasoning.trim(), delta: false });
-      } else if (msg.content && msg.content.trim().length > 0 && msg.content.length > 200 && !msg.tool_calls) {
+      } else if (cleanedContent && cleanedContent.length > 200 && !msg.tool_calls) {
         // Heuristic: if content is long and looks like reasoning (no tool calls), emit first part as thinking
-        const firstSentence = msg.content.split(/\n|\./).slice(0, 3).join(".").trim();
+        const firstSentence = cleanedContent.split(/\n|\./).slice(0, 3).join(".").trim();
         if (firstSentence.length > 50 && firstSentence.length < 500) {
           emit(onLog, { kind: "thinking", ts: ts(), text: firstSentence, delta: false });
         }
@@ -550,14 +552,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       emit(onLog, {
         kind: "assistant",
         ts: ts(),
-        text: msg.content ?? "",
+        text: cleanedContent,
       });
 
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         // OpenAI spec: content should be null (or empty) when tool_calls are present
+        // Use cleanedContent if it exists, otherwise null
         messages.push({
           role: "assistant",
-          content: msg.content || null,
+          content: cleanedContent || null,
           tool_calls: msg.tool_calls,
         });
 
@@ -632,7 +635,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         continue;
       }
 
-      messages.push({ role: "assistant", content: msg.content ?? "" });
+      messages.push({ role: "assistant", content: cleanedContent || "" });
       break;
     }
 
