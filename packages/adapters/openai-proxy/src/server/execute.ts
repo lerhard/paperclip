@@ -651,8 +651,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   } catch (err) {
     stoppedReason = "error";
     const reason = err instanceof Error ? err.message : String(err);
+    const isRateLimit = /\b429\b|rate limit/i.test(reason);
+    const isServerError = /\b5\d\d\b|server error/i.test(reason);
+    const isTransient = isRateLimit || isServerError;
     finalText = reason;
-    runError = { message: reason, code: "proxy_error" };
+    runError = {
+      message: reason,
+      code: isRateLimit ? "rate_limit_exhausted" : isServerError ? "server_error" : "proxy_error",
+    };
+    if (isTransient) {
+      (runError as any).errorFamily = "transient_upstream";
+      (runError as any).retryNotBefore = Date.now() + (isRateLimit ? 60_000 : 30_000);
+    }
     emit(onLog, {
       kind: "stderr",
       ts: ts(),
@@ -712,14 +722,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   });
 
   const isMaxTurns = stoppedReason === "max_turns";
+  const isError = stoppedReason === "error";
+  const isTransientError = isError && (runError as any)?.errorFamily === "transient_upstream";
   return {
-    exitCode: stoppedReason === "error" || isMaxTurns ? 1 : 0,
+    exitCode: isError || isMaxTurns ? 1 : 0,
     signal: null,
     timedOut: false,
     errorMessage: runError ? runError.message : isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
     errorCode: runError ? runError.code : isMaxTurns ? "max_turns_exhausted" : null,
-    errorFamily: isMaxTurns ? "transient_upstream" : null,
-    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : undefined,
+    errorFamily: isMaxTurns || isTransientError ? "transient_upstream" : null,
+    retryNotBefore: isTransientError ? (runError as any).retryNotBefore ?? null : null,
+    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : isError ? { stopReason: runError?.code, detail: runError?.message } : undefined,
     usage: totalUsage,
     model,
     provider: "openai_proxy",

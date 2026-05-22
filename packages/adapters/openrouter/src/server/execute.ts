@@ -71,6 +71,7 @@ interface ChatCompletionResponse {
       role: "assistant";
       content: string | null;
       reasoning?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         id: string;
         type: "function";
@@ -672,8 +673,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        runError = { message: reason, code: "openrouter_request_failed" };
+        const isRateLimit = /\b429\b|rate limit/i.test(reason);
+        const isServerError = /\b5\d\d\b|server error/i.test(reason);
+        const isTransient = isRateLimit || isServerError;
+        runError = { message: reason, code: isRateLimit ? "rate_limit_exhausted" : isServerError ? "server_error" : "openrouter_request_failed" };
         stoppedReason = "error";
+        if (isTransient) {
+          // Attach transient metadata so the heartbeat can schedule a retry
+          (runError as any).errorFamily = "transient_upstream";
+          (runError as any).retryNotBefore = Date.now() + (isRateLimit ? 60_000 : 30_000);
+        }
         break;
       }
 
@@ -694,11 +703,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       const msg = choice.message;
       const reasoning = typeof msg.reasoning === "string" ? msg.reasoning : "";
+      const reasoningContent = typeof msg.reasoning_content === "string" ? msg.reasoning_content : "";
+      const effectiveReasoning = reasoning || reasoningContent;
       const text = typeof msg.content === "string" ? msg.content : "";
       const toolCalls = msg.tool_calls ?? [];
 
-      if (reasoning) {
-        await emitThinking(onLog, reasoning);
+      if (effectiveReasoning) {
+        await emitThinking(onLog, effectiveReasoning);
       }
       if (text) {
         await emitAssistant(onLog, text);
@@ -706,8 +717,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
 
       // Preserve reasoning in context so the model can continue its thought process across turns
-      const contextContent = reasoning && reasoning.trim().length > 0
-        ? `${reasoning.trim()}\n\n${text}`
+      const contextContent = effectiveReasoning && effectiveReasoning.trim().length > 0
+        ? `${effectiveReasoning.trim()}\n\n${text}`
         : text;
 
       // No tool calls => model is done. Early-exit if text clearly signals completion.
@@ -967,12 +978,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const isMaxTurns = stoppedReason === "max_turns";
   if (stoppedReason === "error" && runError) {
+    const isTransient = (runError as any).errorFamily === "transient_upstream";
     return {
       exitCode: 1,
       signal: null,
       timedOut: false,
       errorMessage: runError.message,
       errorCode: runError.code,
+      errorFamily: isTransient ? "transient_upstream" : null,
+      retryNotBefore: isTransient ? (runError as any).retryNotBefore ?? null : null,
+      resultJson: { stopReason: runError.code, detail: runError.message },
       usage: totalUsage,
       model,
       provider: "openrouter",
