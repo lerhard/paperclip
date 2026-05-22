@@ -195,9 +195,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
 
     if (!message?.tool_calls || message.tool_calls.length === 0) {
-      const assistantContent = message?.content || "";
+      // Strip reasoning unavailable placeholder
+      const cleanedContent = (message?.content || "").replace(/\[reasoning unavailable\]/gi, "").trim();
       const reasoningContent = (message as Record<string, unknown> | undefined)?.reasoning_content as string | undefined;
-      const summary = reasoningContent ? `${reasoningContent}\n${assistantContent}` : assistantContent;
+      if (reasoningContent && reasoningContent.trim().length > 0) {
+        await onLog("stdout", `[thinking] ${reasoningContent.trim()}\n`);
+      }
 
       await onLog("stdout", `[DS] done ${turnCount}t\n`);
 
@@ -205,7 +208,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         exitCode: 0,
         signal: null,
         timedOut: false,
-        summary,
+        summary: cleanedContent,
         usage: {
           inputTokens: totalInputTokens,
           outputTokens: totalOutputTokens,

@@ -232,10 +232,21 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
         parameters: {
           type: "object",
           properties: {
-            action: { type: "string", enum: ["get_issue", "update_issue_status", "add_comment", "list_child_issues"] },
-            issue_id: { type: "string" },
+            action: { type: "string", enum: ["get_issue", "update_issue_status", "add_comment", "list_issues", "hire_agent", "list_agents"] },
+            issue_id: { type: "string", description: "Target issue id. Defaults to current issue for most actions." },
             status: { type: "string", enum: ["in_progress", "done", "blocked", "in_review"] },
             comment: { type: "string" },
+            limit: { type: "number" },
+            name: { type: "string", description: "Agent display name for hire_agent" },
+            role: { type: "string", description: "Agent role for hire_agent" },
+            title: { type: "string", description: "Agent job title for hire_agent" },
+            icon: { type: "string", description: "Agent icon name for hire_agent" },
+            capabilities: { type: "string", description: "Agent capabilities for hire_agent" },
+            mission: { type: "string", description: "Agent mission (mapped to capabilities) for hire_agent" },
+            adapter_type: { type: "string", description: "Adapter type for hire_agent. Default: deepseek_local" },
+            model: { type: "string", description: "Model for hire_agent" },
+            reports_to_agent_id: { type: "string", description: "Manager agent id for hire_agent" },
+            desired_skills: { type: "array", items: { type: "string" }, description: "Desired skills for hire_agent" },
           },
           required: ["action"],
         },
@@ -247,20 +258,66 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
       if (!issueId) return fail("issue_id required");
 
       switch (action) {
-        case "get_issue":
-          return safeExec("get_issue", () => callApi("GET", `/api/issues/${issueId}`));
+        case "get_issue": {
+          const targetIssueId = issueId || ctx.currentIssueId;
+          if (!targetIssueId) return fail("issue_id required (no current issue available)");
+          return safeExec("get_issue", () => callApi("GET", `/api/issues/${targetIssueId}`));
+        }
         case "update_issue_status": {
           const status = asString(args.status);
           if (!status) return fail("status required");
-          return safeExec("update_status", () => callApi("PATCH", `/api/issues/${issueId}`, { status }));
+          const targetIssueId = issueId || ctx.currentIssueId;
+          if (!targetIssueId) return fail("issue_id required");
+          return safeExec("update_status", () => callApi("PATCH", `/api/issues/${targetIssueId}`, { status }));
         }
         case "add_comment": {
           const comment = asString(args.comment);
           if (!comment) return fail("comment required");
-          return safeExec("add_comment", () => callApi("POST", `/api/issues/${issueId}/comments`, { body: comment }));
+          const targetIssueId = issueId || ctx.currentIssueId;
+          if (!targetIssueId) return fail("issue_id required");
+          return safeExec("add_comment", () => callApi("POST", `/api/issues/${targetIssueId}/comments`, { body: comment }));
         }
-        case "list_child_issues":
-          return safeExec("list_children", () => callApi("GET", `/api/issues/${issueId}/children`));
+        case "list_issues": {
+          const query: Record<string, string> = {};
+          query.limit = String(typeof args.limit === "number" ? args.limit : 20);
+          return safeExec("list_issues", () => callApi("GET", `/api/companies/${ctx.companyId}/issues?${new URLSearchParams(query)}`));
+        }
+        case "hire_agent": {
+          const name = asString(args.name);
+          const role = asString(args.role);
+          const capabilities = asString(args.capabilities) || asString(args.mission);
+          if (!name) return fail("name required");
+          if (!role) return fail("role required");
+          const adapterConfig: Record<string, unknown> = {};
+          if (args.model) adapterConfig.model = args.model;
+          const payload: Record<string, unknown> = {
+            name,
+            role,
+            title: asString(args.title) || undefined,
+            icon: asString(args.icon) || undefined,
+            capabilities: capabilities || undefined,
+            adapterType: args.adapter_type ?? "deepseek_local",
+            adapterConfig: Object.keys(adapterConfig).length > 0 ? adapterConfig : undefined,
+            reportsTo: asString(args.reports_to_agent_id) || undefined,
+          };
+          if (Array.isArray(args.desired_skills) && args.desired_skills.length > 0) {
+            payload.desiredSkills = args.desired_skills.map((s: unknown) => String(s));
+          }
+          return safeExec("hire_agent", () => callApi("POST", `/api/companies/${ctx.companyId}/agents`, payload));
+        }
+        case "list_agents":
+          return safeExec("list_agents", async () => {
+            const agents = await callApi("GET", `/api/companies/${ctx.companyId}/agents`) as Array<Record<string, unknown>>;
+            return agents.map((a) => ({
+              id: a.id,
+              name: a.name,
+              role: a.role,
+              adapterType: a.adapterType,
+              model: (a.adapterConfig as Record<string, unknown> | undefined)?.model ?? null,
+              status: a.status,
+              reportsToAgentId: a.reportsToAgentId ?? null,
+            }));
+          });
         default:
           return fail(`Unknown action: ${action}`);
       }
