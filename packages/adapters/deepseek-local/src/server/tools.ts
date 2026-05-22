@@ -303,7 +303,7 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
           if (Array.isArray(args.desired_skills) && args.desired_skills.length > 0) {
             payload.desiredSkills = args.desired_skills.map((s: unknown) => String(s));
           }
-          return safeExec("hire_agent", () => callApi("POST", `/api/companies/${ctx.companyId}/agents`, payload));
+          return safeExec("hire_agent", () => callApi("POST", `/api/companies/${ctx.companyId}/agent-hires`, payload));
         }
         case "list_agents":
           return safeExec("list_agents", async () => {
