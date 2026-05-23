@@ -504,12 +504,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     `OpenRouter adapter active config: ${activeConfigParts.join(", ")}`
   );
 
+  // Warn if multiple compression methods are enabled (can confuse the model)
+  const compressionMethodsEnabled = [useRTK, useCaveman].filter(Boolean).length;
+  if (compressToolResults && compressionMethodsEnabled > 1) {
+    await writeRawStderr(
+      onLog,
+      `[openrouter] WARNING: Multiple compression methods enabled (RTK=${useRTK}, Caveman=${useCaveman}). This may confuse the model. Recommend using only ONE compression method at a time.`
+    );
+  }
+
   // ----- build messages -----
 
   let messages: ChatMessage[] = [];
 
   // System prompt = base + skills + optional instructions file
   let systemContent = config.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  
+  // If compression is enabled, add documentation about compression formats to system prompt
+  const compressionFormats = [];
+  if (compressToolResults) {
+    if (useRTK) compressionFormats.push("[RTK+TOON] = pipe-separated columnar format with abbreviated keys (id→i, name→n, etc.)");
+    if (useCaveman) compressionFormats.push("[CAVEMAN] = ultra-minimal text (articles/prepositions removed)");
+    if (!useRTK && !useCaveman) {
+      compressionFormats.push("[TOON] = pipe-separated columnar format (header|row1|row2)");
+      compressionFormats.push("[RTK] = JSON with abbreviated keys");
+      compressionFormats.push("[VARMAN] = condensed text (filler phrases removed)");
+    }
+  }
+  if (compressionFormats.length > 0) {
+    systemContent = `${systemContent}\n\nCompression formats in tool results:\n${compressionFormats.map(f => `- ${f}`).join("\n")}\nThese are compressed for token efficiency. Parse them carefully.`;
+  }
 
   // If promptTemplate is set, render it with template data (mirrors claude/codex)
   const promptTemplate = (config as unknown as Record<string, unknown>).promptTemplate;
