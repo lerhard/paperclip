@@ -442,6 +442,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let totalCachedInputTokens = 0;
+  
+  // Session management: use runId as stable sessionId
+  const sessionId = runId;
   let turnCount = 0;
   let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
   let runError: { message: string; code: string } | null = null;
@@ -757,17 +761,34 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     errorCode: runError ? runError.code : isMaxTurns ? "max_turns_exhausted" : null,
     errorFamily: isMaxTurns || hasTransientError ? "transient_upstream" : null,
     retryNotBefore: hasTransientError ? (runError as any).retryNotBefore ?? null : null,
-    resultJson: isMaxTurns
-      ? { stopReason: "max_turns_exhausted" }
-      : isError
-        ? { stopReason: runError?.code, detail: runError?.message }
-        : { stopReason: "completed" },
-    usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
+    resultJson: (() => {
+      const base: Record<string, unknown> = {
+        stopReason: isMaxTurns ? "max_turns_exhausted" : stoppedReason === "error" ? runError?.code : "completed",
+        turnsCompleted: turnCount,
+        finalTextLength: finalText.length,
+        usage: {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          cachedInputTokens: totalCachedInputTokens,
+        },
+      };
+      if (hasTransientError) {
+        base.errorFamily = "transient_upstream";
+        base.retryNotBefore = (runError as any)?.retryNotBefore ?? null;
+      }
+      if (stoppedReason === "error" && runError) {
+        base.errorDetail = runError.message;
+      }
+      return base;
+    })(),
+    usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens, cachedInputTokens: totalCachedInputTokens },
     model,
     provider: "deepseek",
     biller: "deepseek",
     billingType: "api",
     clearSession: shouldClearSession,
+    sessionId,
+    sessionDisplayId: sessionId,
     sessionParams: {
       lastGenerationId: runId,
       ...(workspaceId ? { workspaceId } : {}),
