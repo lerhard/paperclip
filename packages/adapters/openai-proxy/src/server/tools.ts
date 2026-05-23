@@ -197,18 +197,23 @@ function searchFilesTool(): Tool {
       },
     },
     execute: async (args) => {
-      const { exec } = await import("node:child_process");
-      const { promisify } = await import("node:util");
-      const execAsync = promisify(exec);
       const query = asString(args.query);
       if (!query) return fail("query required");
       const searchPath = asString(args.path, ".");
       const glob = asString(args.glob, "*");
       return safeExec("search", async () => {
-        const cmd = `grep -r -n -I --include="${glob}" -E "${query.replace(/"/g, '\\"')}" "${searchPath}" || true`;
-        const { stdout } = await execAsync(cmd, { timeout: 15000 });
-        const lines = stdout.trim().split("\n").filter(Boolean);
-        return { matches: lines.slice(0, 50), count: lines.length };
+        const { execFile } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const execFileAsync = promisify(execFile);
+        const grepArgs = ["-r", "-n", "-I", `--include=${glob}`, "-E", query, searchPath];
+        try {
+          const { stdout } = await execFileAsync("grep", grepArgs, { timeout: 15000 });
+          const lines = stdout.trim().split("\n").filter(Boolean);
+          return { matches: lines.slice(0, 50), count: lines.length };
+        } catch (err: any) {
+          if (err.code === 1 || err.status === 1) return { matches: [], count: 0 };
+          throw err;
+        }
       });
     },
   };
@@ -222,14 +227,32 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
       "Content-Type": "application/json",
       "X-Paperclip-Run-Id": ctx.runId,
     };
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`${res.status}: ${text.slice(0, 500)}`);
-    return text ? JSON.parse(text) : {};
+    const maxRetries = 2;
+    let lastErr: Error | null = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const text = await res.text();
+        if (res.status >= 500 && attempt < maxRetries) {
+          lastErr = new Error(`${res.status}: ${text.slice(0, 500)}`);
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) throw new Error(`${res.status}: ${text.slice(0, 500)}`);
+        return text ? JSON.parse(text) : {};
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+      }
+    }
+    throw lastErr ?? new Error("callApi failed after retries");
   }
 
   return {
@@ -257,7 +280,7 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
               description: "API action to perform",
             },
             issue_id: { type: "string", description: "Target issue id. Defaults to current issue for most actions." },
-            status: { type: "string", enum: ["open", "in_progress", "blocked", "done", "cancelled"], description: "New status" },
+            status: { type: "string", enum: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"], description: "New status" },
             comment: { type: "string", description: "Comment body" },
             title: { type: "string", description: "Title for create_sub_issue" },
             description: { type: "string", description: "Description for create_sub_issue" },
@@ -447,10 +470,10 @@ function editFileTool(): Tool {
     execute: async (args) => {
       const filePath = asString(args.path);
       const oldContent = asString(args.old_content);
-      const newContent = asString(args.new_content);
+      const newContent = typeof args.new_content === "string" ? args.new_content : "";
       if (!filePath) return fail("path required");
       if (!oldContent) return fail("old_content required");
-      if (newContent === null) return fail("new_content required");
+      if (args.new_content === undefined || args.new_content === null) return fail("new_content required");
       return safeExec("edit_file", async () => {
         const fs = await import("node:fs/promises");
         const current = await fs.readFile(filePath, "utf-8");

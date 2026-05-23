@@ -711,7 +711,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let totalUsage: UsageSummary = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
   let finalAssistantText = "";
   let turn = 0;
-  let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
+  let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "max_turns";
   let runError: { message: string; code: string } | null = null;
   
   // Session management: generate a stable sessionId for this run
@@ -722,11 +722,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // misreads an error message and keeps "fixing" it the same wrong way.
   const recentCalls: string[] = [];
   const REPEAT_THRESHOLD = 3;
+  // Text-repetition detection: catch content-level loops where the model
+  // repeats the same text response without making any tool calls.
+  const recentTexts: string[] = [];
+  const TEXT_REPEAT_THRESHOLD = 3;
+  // Track how many consecutive text-only turns (no tool calls) have occurred.
+  // If the model keeps talking without calling tools and without signaling
+  // completion, we need to nudge it or bail out.
+  let consecutiveTextOnlyTurns = 0;
+  const MAX_TEXT_ONLY_TURNS = 3;
   // Track per-key usage across the entire run
   const keyUsage = new Map<string, { requests: number; rateLimit: RateLimitStatus }>();
 
   // Tool result cache: avoid re-executing same tool with same args across turns
   const toolResultCache = new Map<string, { content: string; isError: boolean }>();
+  // Track whether the model already called update_issue_status during this run,
+  // so the post-loop doesn't overwrite it with a potentially conflicting status.
+  let modelUpdatedIssueStatus = false;
 
   await emitSystem(onLog, `[openrouter] Starting tool loop: maxTurns=${maxTurns}, tools=${tools.length}, authToken=${!!authToken}`);
 
@@ -745,7 +757,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (maxContextMessages && messages.length > maxContextMessages + 1) {
         // Always keep system message (index 0) + last N messages
         const systemMsg = messages[0];
-        const recentMessages = messages.slice(-(maxContextMessages));
+        let recentMessages = messages.slice(-(maxContextMessages));
+        
+        // Don't start with a tool message (needs its parent assistant message)
+        while (recentMessages.length > 0 && recentMessages[0].role === "tool") {
+          recentMessages = recentMessages.slice(1);
+        }
+
+        // Remove orphaned tool messages whose tool_call_id has no matching assistant
+        const availableToolCallIds = new Set<string>();
+        for (const m of recentMessages) {
+          if (m.role === "assistant" && m.tool_calls) {
+            for (const tc of m.tool_calls) availableToolCallIds.add(tc.id);
+          }
+        }
+        recentMessages = recentMessages.filter(m => {
+          if (m.role === "tool" && m.tool_call_id) {
+            return availableToolCallIds.has(m.tool_call_id);
+          }
+          return true;
+        });
+
         messagesToSend = [systemMsg, ...recentMessages];
         
         if (turn === 1) {
@@ -804,6 +836,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         break;
       }
 
+      // API can return { error: { message, type, code } } even with HTTP 200
+      if ((response as any).error) {
+        const apiErr = (response as any).error;
+        const errMsg = typeof apiErr === "object" ? (apiErr.message || JSON.stringify(apiErr)) : String(apiErr);
+        await writeRawStderr(onLog, `[openrouter] API returned error in body: ${errMsg}`);
+        runError = { message: `OpenRouter API error: ${errMsg}`, code: "openrouter_api_error" };
+        stoppedReason = "error";
+        break;
+      }
+
       lastGenerationId = response.id || lastGenerationId;
       if (response.usage) {
         totalUsage = {
@@ -822,6 +864,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
 
       const msg = choice.message;
+      const finishReason = choice.finish_reason;
       const reasoning = typeof msg.reasoning === "string" ? msg.reasoning : "";
       const reasoningContent = typeof msg.reasoning_content === "string" ? msg.reasoning_content : "";
       const effectiveReasoning = reasoning || reasoningContent;
@@ -836,15 +879,30 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         finalAssistantText = text;
       }
 
+      // Handle finish_reason: "length" means the response was truncated by max_tokens.
+      // The model was cut off mid-thought — nudge it to continue instead of treating
+      // the incomplete output as a final response.
+      if (finishReason === "length" && toolCalls.length === 0) {
+        await writeRawStderr(onLog, `[openrouter] Response truncated (finish_reason=length). Nudging model to continue...`);
+        messages.push({ role: "assistant", content: text || "" });
+        messages.push({
+          role: "user",
+          content: "SYSTEM: Your previous response was cut off because it exceeded the maximum token limit. Please continue from where you stopped. If you were about to call a tool, please call it now.",
+        });
+        continue;
+      }
+
       // Preserve reasoning in context so the model can continue its thought process across turns
       const contextContent = effectiveReasoning && effectiveReasoning.trim().length > 0
         ? `${effectiveReasoning.trim()}\n\n${text}`
         : text;
 
-      // No tool calls => model is done. Early-exit if text clearly signals completion.
+      // No tool calls => check whether we should treat this as completion.
       if (toolCalls.length === 0) {
         if (!text && !effectiveReasoning) {
           await writeRawStderr(onLog, `[openrouter] WARNING: Model returned empty response (no text, no reasoning, no tool calls). Treating as completion.`);
+          stoppedReason = "completed";
+          break;
         }
         
         // Detect if model is generating pseudo-code tool calls (markdown/XML) instead of real JSON tool calls
@@ -855,50 +913,79 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           /```\s*(?:json|tool|function)/i,
           /\[tool_call\]/i,
           /\{tool_call\}/i,
+          /<\/?(tool|function|parameter|invoke)[ >]/i,
         ];
         const hasPseudoCode = pseudoCodePatterns.some(p => p.test(text));
         if (hasPseudoCode) {
-          await writeRawStderr(onLog, `[openrouter] WARNING: Model generated pseudo-code tool calls (markdown/XML) instead of JSON. Attempting to parse and recover...`);
-          
-          // Try to extract function name and parameters from pseudo-code
-          // Pattern: <function=name> or function: name or similar
-          const funcNameMatch = text.match(/<function=(\w+)>|function:\s*(\w+)|<function\s+name="?(\w+)"?/i);
-          const funcName = funcNameMatch ? (funcNameMatch[1] || funcNameMatch[2] || funcNameMatch[3]) : null;
-          
-          if (funcName && findTool(tools, funcName)) {
-            // Try to extract parameters (look for <parameter=value> or parameter: value patterns)
-            const paramsMatch = text.match(/<parameter=path>\s*\n\s*([^\n<]+)/i) || text.match(/path[:\s=]+([^\n<]+)/i);
-            const paramValue = paramsMatch ? paramsMatch[1].trim() : "";
-            
-            if (paramValue) {
-              await writeRawStderr(onLog, `[openrouter] Recovered pseudo-code: function=${funcName}, path=${paramValue}`);
-              // Don't break; let the loop continue naturally so the model can try again
-              // (we could auto-execute here, but better to let the model learn the correct format)
-            }
+          await writeRawStderr(onLog, `[openrouter] WARNING: Model generated pseudo-code tool calls (markdown/XML) instead of JSON tool_calls. Injecting correction and retrying...`);
+          // Add the assistant's broken response, then a corrective user message
+          messages.push({ role: "assistant", content: text });
+          messages.push({
+            role: "user",
+            content: "SYSTEM: You tried to call tools using text/XML formatting, but this adapter requires structured JSON tool_calls. Do NOT write <tool_call>, <function=...>, or markdown code blocks to invoke tools. Instead, use the tool_calls mechanism provided by the API. Please retry your action using the correct tool calling format.",
+          });
+          consecutiveTextOnlyTurns++;
+          if (consecutiveTextOnlyTurns >= MAX_TEXT_ONLY_TURNS) {
+            await writeRawStderr(onLog, `[openrouter] Model failed to use structured tool calls after ${MAX_TEXT_ONLY_TURNS} attempts. Breaking loop.`);
+            runError = {
+              message: `Model repeatedly generated pseudo-code tool calls instead of using the structured tool_calls API after ${MAX_TEXT_ONLY_TURNS} attempts.`,
+              code: "pseudo_tool_call_loop",
+            };
+            stoppedReason = "error";
+            break;
           }
+          continue;
         }
-        
-        stoppedReason = "completed";
-        break;
+
+        // Check for explicit completion signals
+        const lowerTextNoTools = text.toLowerCase();
+        const completionSignals = [
+          "status: done", "status=done", "task complete", "work is done",
+          "finished successfully", "completed successfully", "nothing more to do",
+          "all done", "issue is complete", "marked as done",
+        ];
+        if (completionSignals.some((p) => lowerTextNoTools.includes(p))) {
+          stoppedReason = "completed";
+          break;
+        }
+
+        // Text-repetition loop detection
+        const textSig = text.trim().slice(0, 500);
+        recentTexts.push(textSig);
+        if (recentTexts.length > TEXT_REPEAT_THRESHOLD) recentTexts.shift();
+        if (
+          recentTexts.length === TEXT_REPEAT_THRESHOLD &&
+          recentTexts.every((t) => t === textSig)
+        ) {
+          await writeRawStderr(onLog, `[openrouter] Model repeated the same text ${TEXT_REPEAT_THRESHOLD}x without tool calls — breaking loop.`);
+          runError = {
+            message: `Model repeated the same text response ${TEXT_REPEAT_THRESHOLD} times without making any tool calls. Likely stuck in a loop.`,
+            code: "text_repeat_loop",
+          };
+          stoppedReason = "repeat_loop";
+          break;
+        }
+
+        // Model responded with text but no completion signal and no tool calls.
+        // Give it a few chances to self-correct by nudging it.
+        consecutiveTextOnlyTurns++;
+        if (consecutiveTextOnlyTurns >= MAX_TEXT_ONLY_TURNS) {
+          await writeRawStderr(onLog, `[openrouter] Model responded ${MAX_TEXT_ONLY_TURNS}x with text only (no tool calls, no completion signal). Treating as completed.`);
+          stoppedReason = "completed";
+          break;
+        }
+
+        // Nudge the model to use tools or signal completion
+        messages.push({ role: "assistant", content: text });
+        messages.push({
+          role: "user",
+          content: "SYSTEM: You responded with text but did not call any tools and did not signal completion (status: done). Please either use the available tools to make progress, or if you are finished, explicitly state 'status: done' with a summary.",
+        });
+        continue;
       }
 
-      // Early-exit: if model says it's done but also included tool calls (rare),
-      // detect completion phrases to avoid wasting turns.
-      const lowerText = text.toLowerCase();
-      const completionPhrases = [
-        "status: done",
-        "task complete",
-        "work is done",
-        "finished successfully",
-        "completed successfully",
-        "nothing more to do",
-        "all done",
-      ];
-      if (completionPhrases.some((p) => lowerText.includes(p))) {
-        await emitSystem(onLog, "Early exit: model signaled completion");
-        stoppedReason = "completed";
-        break;
-      }
+      // Reset text-only counter when model makes tool calls
+      consecutiveTextOnlyTurns = 0;
 
       // Add the assistant message (with tool_calls) so the model sees its own request.
       messages.push({
@@ -1006,6 +1093,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           content: compressedContent, // Send compressed to model
         });
 
+        // Bug 9 fix: Invalidate cached read results when a write operation occurs on the same path
+        const writePaths = ["write_file", "edit_file", "move_file", "delete_file"];
+        if (writePaths.includes(toolName)) {
+          const writePath = args.path as string | undefined;
+          if (writePath) {
+            for (const [key] of toolResultCache) {
+              if (key.includes(writePath)) {
+                toolResultCache.delete(key);
+              }
+            }
+          }
+        }
+
+        // Bug 11 fix: Track if model explicitly updated issue status via tool
+        if (toolName === "update_issue_status" && !isError) {
+          modelUpdatedIssueStatus = true;
+        }
+
         // Track repeat calls
         const callSig = `${toolName}::${JSON.stringify(args)}`;
         recentCalls.push(callSig);
@@ -1029,7 +1134,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (stoppedReason === "repeat_loop") break;
     }
 
-    if (turn >= maxTurns && stoppedReason !== "error") {
+    if (turn >= maxTurns && stoppedReason !== "error" && stoppedReason !== "repeat_loop") {
       stoppedReason = "max_turns";
       await writeRawStderr(onLog, `[openrouter] hit max_turns (${maxTurns}), stopping`);
     }
@@ -1066,7 +1171,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   // Update issue status based on outcome.
-  if (api && currentIssueId) {
+  // Skip if the model already explicitly set the status via update_issue_status tool.
+  if (api && currentIssueId && !modelUpdatedIssueStatus) {
     let nextStatus: string | null = null;
     let statusReason: string | null = null;
     if (stoppedReason === "completed") {
@@ -1205,12 +1311,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   return {
-    exitCode: isMaxTurns ? 1 : 0,
+    exitCode: 0,
     signal: null,
     timedOut: false,
     errorMessage: isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
     errorCode: isMaxTurns ? "max_turns_exhausted" : null,
-    errorFamily: isMaxTurns ? "transient_upstream" : null,
+    errorFamily: null,
     resultJson: buildResultJson(),
     usage: totalUsage,
     model,

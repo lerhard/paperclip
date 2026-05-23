@@ -188,18 +188,23 @@ function searchFilesTool(): Tool {
       },
     },
     execute: async (args) => {
-      const { exec } = await import("node:child_process");
-      const { promisify } = await import("node:util");
-      const execAsync = promisify(exec);
       const query = asString(args.query);
       if (!query) return fail("query required");
       const searchPath = asString(args.path, ".");
       const glob = asString(args.glob, "*");
       return safeExec("search", async () => {
-        const cmd = `grep -r -n -I --include="${glob}" -E "${query.replace(/"/g, '\\"')}" "${searchPath}" || true`;
-        const { stdout } = await execAsync(cmd, { timeout: 15000 });
-        const lines = stdout.trim().split("\n").filter(Boolean);
-        return { matches: lines.slice(0, 50), count: lines.length };
+        const { execFile } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const execFileAsync = promisify(execFile);
+        const grepArgs = ["-r", "-n", "-I", `--include=${glob}`, "-E", query, searchPath];
+        try {
+          const { stdout } = await execFileAsync("grep", grepArgs, { timeout: 15000 });
+          const lines = stdout.trim().split("\n").filter(Boolean);
+          return { matches: lines.slice(0, 50), count: lines.length };
+        } catch (err: any) {
+          if (err.code === 1 || err.status === 1) return { matches: [], count: 0 };
+          throw err;
+        }
       });
     },
   };
@@ -213,14 +218,32 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
       "Content-Type": "application/json",
       "X-Paperclip-Run-Id": ctx.runId,
     };
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`${res.status}: ${text.slice(0, 500)}`);
-    return text ? JSON.parse(text) : {};
+    const maxRetries = 2;
+    let lastErr: Error | null = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const text = await res.text();
+        if (res.status >= 500 && attempt < maxRetries) {
+          lastErr = new Error(`${res.status}: ${text.slice(0, 500)}`);
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) throw new Error(`${res.status}: ${text.slice(0, 500)}`);
+        return text ? JSON.parse(text) : {};
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+      }
+    }
+    throw lastErr ?? new Error("callApi failed after retries");
   }
 
   return {
@@ -234,7 +257,7 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
           properties: {
             action: { type: "string", enum: ["get_issue", "update_issue_status", "add_comment", "list_issues", "hire_agent", "list_agents"] },
             issue_id: { type: "string", description: "Target issue id. Defaults to current issue for most actions." },
-            status: { type: "string", enum: ["in_progress", "done", "blocked", "in_review"] },
+            status: { type: "string", enum: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"] },
             comment: { type: "string" },
             limit: { type: "number" },
             name: { type: "string", description: "Agent display name for hire_agent" },
@@ -255,7 +278,6 @@ function paperclipApiTool(ctx: BuildToolsContext): Tool {
     execute: async (args) => {
       const action = asString(args.action);
       const issueId = asString(args.issue_id, ctx.currentIssueId ?? "");
-      if (!issueId) return fail("issue_id required");
 
       switch (action) {
         case "get_issue": {

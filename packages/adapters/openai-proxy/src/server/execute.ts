@@ -519,16 +519,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   let finalText = "";
-  let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
+  let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "max_turns";
   let runError: { message: string; code: string } | null = null;
   let turn = 0;
 
   // Loop-detection: same tool + same args 3x in a row = break
   const recentCalls: string[] = [];
   const REPEAT_THRESHOLD = 3;
+  // Text-repetition detection: catch content-level loops where the model
+  // repeats the same text response without making any tool calls.
+  const recentTexts: string[] = [];
+  const TEXT_REPEAT_THRESHOLD = 3;
+  // Track how many consecutive text-only turns (no tool calls) have occurred.
+  let consecutiveTextOnlyTurns = 0;
+  const MAX_TEXT_ONLY_TURNS = 3;
 
   // Tool result cache: avoid re-executing identical calls across turns
   const toolResultCache = new Map<string, { content: string; isError: boolean }>();
+  // Track whether the model already called update_issue_status during this run
+  let modelUpdatedIssueStatus = false;
   // Hard cap: if messages grow beyond this, aggressively truncate to prevent memory explosion
   const HARD_MESSAGE_CAP = 80;
 
@@ -552,7 +561,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         while (startIndex > 1 && messages[startIndex].role === "tool") {
           startIndex--;
         }
-        messagesToSend = [systemMsg, ...messages.slice(startIndex)];
+        let slicedMessages = messages.slice(startIndex);
+
+        // Remove orphaned tool messages whose tool_call_id has no matching assistant
+        const availableToolCallIds = new Set<string>();
+        for (const m of slicedMessages) {
+          if (m.role === "assistant" && m.tool_calls) {
+            for (const tc of m.tool_calls) availableToolCallIds.add(tc.id);
+          }
+        }
+        slicedMessages = slicedMessages.filter(m => {
+          if (m.role === "tool" && m.tool_call_id) {
+            return availableToolCallIds.has(m.tool_call_id);
+          }
+          return true;
+        });
+
+        messagesToSend = [systemMsg, ...slicedMessages];
         if (turn === 1 || turn % 5 === 0) {
           emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Context truncated: ${messages.length} → ${messagesToSend.length} messages` });
         }
@@ -624,7 +649,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }, { maxRetries: 3, timeoutMs: timeoutSec * 1000, onLog });
 
       const data = (await res.json()) as ChatCompletionResponse;
+
+      // API can return { error: { message, type, code } } even with HTTP 200
+      if ((data as any).error) {
+        const apiErr = (data as any).error;
+        const errMsg = typeof apiErr === "object" ? (apiErr.message || JSON.stringify(apiErr)) : String(apiErr);
+        throw new Error(`OpenAI Proxy API error: ${errMsg}`);
+      }
+
       const choice = data.choices?.[0];
+      const finishReason = choice?.finish_reason;
       if (!choice) {
         throw new Error("No choices returned from OpenAI Proxy API");
       }
@@ -665,7 +699,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         ? `${reasoning.trim()}\n\n${cleanedContent}`
         : cleanedContent;
 
+      // Handle finish_reason: "length" means the response was truncated by max_tokens.
+      if (finishReason === "length" && !(msg.tool_calls && msg.tool_calls.length > 0)) {
+        emit(onLog, { kind: "stderr", ts: ts(), text: "[openai-proxy] Response truncated (finish_reason=length). Nudging model to continue..." });
+        messages.push({ role: "assistant", content: contextContent || "" });
+        messages.push({
+          role: "user",
+          content: "SYSTEM: Your previous response was cut off because it exceeded the maximum token limit. Please continue from where you stopped. If you were about to call a tool, please call it now.",
+        });
+        continue;
+      }
+
       if (msg.tool_calls && msg.tool_calls.length > 0) {
+        // Reset text-only counter when model makes tool calls
+        consecutiveTextOnlyTurns = 0;
+
         // OpenAI spec: content should be null (or empty) when tool_calls are present
         // Preserve reasoning in content so the model sees its own reasoning across turns
         messages.push({
@@ -724,6 +772,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             isError: result.isError,
           });
 
+          // Invalidate cached read results when a write operation occurs on the same path
+          const writePaths = ["write_file", "edit_file", "move_file", "delete_file"];
+          if (writePaths.includes(tc.function.name)) {
+            let writePath: string | undefined;
+            try { writePath = JSON.parse(tc.function.arguments).path; } catch { /* ignore */ }
+            if (writePath) {
+              for (const [key] of toolResultCache) {
+                if (key.includes(writePath)) {
+                  toolResultCache.delete(key);
+                }
+              }
+            }
+          }
+
+          // Track if model explicitly updated issue status via tool
+          if (tc.function.name === "paperclip_api" && !result.isError) {
+            try {
+              const parsedArgs = JSON.parse(tc.function.arguments);
+              if (parsedArgs.action === "update_issue_status") modelUpdatedIssueStatus = true;
+            } catch { /* ignore */ }
+          }
+
           // Track repeat calls
           recentCalls.push(cacheKey);
           if (recentCalls.length > REPEAT_THRESHOLD) recentCalls.shift();
@@ -745,8 +815,90 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         continue;
       }
 
+      // No tool calls — check if we should treat this as completion or continue.
+      if (!cleanedContent) {
+        emit(onLog, { kind: "stderr", ts: ts(), text: "[openai-proxy] WARNING: Empty response (no text, no tool calls). Treating as completion." });
+        stoppedReason = "completed";
+        break;
+      }
+
+      // Detect pseudo-code tool calls (model outputs HTML/XML tags instead of structured tool_calls)
+      const pseudoCodePatterns = [
+        /<tool_call>/i,
+        /<function=/i,
+        /```\s*(?:json|tool|function)/i,
+        /\[tool_call\]/i,
+        /\{tool_call\}/i,
+        /<\/?(tool|function|parameter|invoke)[ >]/i,
+      ];
+      const hasPseudoCode = pseudoCodePatterns.some(p => p.test(cleanedContent));
+      if (hasPseudoCode) {
+        emit(onLog, { kind: "stderr", ts: ts(), text: "[openai-proxy] WARNING: Model generated pseudo-code tool calls (text/XML) instead of structured tool_calls. Injecting correction..." });
+        messages.push({ role: "assistant", content: contextContent || "" });
+        messages.push({
+          role: "user",
+          content: "SYSTEM: You tried to call tools using text/XML formatting, but this adapter requires structured JSON tool_calls. Do NOT write <tool_call>, <function=...>, or markdown code blocks to invoke tools. Instead, use the tool_calls mechanism provided by the API. Please retry your action using the correct tool calling format.",
+        });
+        consecutiveTextOnlyTurns++;
+        if (consecutiveTextOnlyTurns >= MAX_TEXT_ONLY_TURNS) {
+          emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] Model failed to use structured tool calls after ${MAX_TEXT_ONLY_TURNS} attempts. Breaking loop.` });
+          runError = {
+            message: `Model repeatedly generated pseudo-code tool calls instead of using the structured tool_calls API after ${MAX_TEXT_ONLY_TURNS} attempts.`,
+            code: "pseudo_tool_call_loop",
+          };
+          stoppedReason = "error";
+          break;
+        }
+        continue;
+      }
+
+      // Check for explicit completion signals
+      const lowerText = cleanedContent.toLowerCase();
+      const completionSignals = [
+        "status: done", "status=done", "task complete", "work is done",
+        "finished successfully", "completed successfully", "nothing more to do",
+        "all done", "issue is complete", "marked as done",
+      ];
+      if (completionSignals.some((p) => lowerText.includes(p))) {
+        messages.push({ role: "assistant", content: contextContent || "" });
+        stoppedReason = "completed";
+        break;
+      }
+
+      // Text-repetition loop detection
+      const textSig = cleanedContent.trim().slice(0, 500);
+      recentTexts.push(textSig);
+      if (recentTexts.length > TEXT_REPEAT_THRESHOLD) recentTexts.shift();
+      if (
+        recentTexts.length === TEXT_REPEAT_THRESHOLD &&
+        recentTexts.every((t) => t === textSig)
+      ) {
+        emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] Model repeated the same text ${TEXT_REPEAT_THRESHOLD}x without tool calls \u2014 breaking loop.` });
+        runError = {
+          message: `Model repeated the same text response ${TEXT_REPEAT_THRESHOLD} times without making any tool calls. Likely stuck in a loop.`,
+          code: "text_repeat_loop",
+        };
+        stoppedReason = "repeat_loop";
+        break;
+      }
+
+      // Model responded with text but no completion signal and no tool calls.
+      // Give it a few chances to self-correct by nudging it.
+      consecutiveTextOnlyTurns++;
+      if (consecutiveTextOnlyTurns >= MAX_TEXT_ONLY_TURNS) {
+        emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] Model responded ${MAX_TEXT_ONLY_TURNS}x with text only (no tool calls, no completion signal). Treating as completed.` });
+        messages.push({ role: "assistant", content: contextContent || "" });
+        stoppedReason = "completed";
+        break;
+      }
+
+      // Nudge the model to use tools or signal completion
       messages.push({ role: "assistant", content: contextContent || "" });
-      break;
+      messages.push({
+        role: "user",
+        content: "SYSTEM: You responded with text but did not call any tools and did not signal completion (status: done). Please either use the available tools to make progress, or if you are finished, explicitly state 'status: done' with a summary.",
+      });
+      continue;
     }
 
     if (turn >= maxTurns && stoppedReason !== "repeat_loop") {
@@ -761,10 +913,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // Session/conversation not found => retry with clean messages (mirrors claude/codex)
     const isSessionUnknown = /session.*not found|conversation.*not found|unknown.*run|run.*not found|no conversation found/i.test(cleanedReason);
     if (isSessionUnknown && !isTransientErr) {
-      emit(onLog, { kind: "system", ts: ts(), text: "Session not found; retrying with clean messages..." });
-      messages = [
-        { role: "system", content: systemContent },
-      ];
+      emit(onLog, { kind: "system", ts: ts(), text: "Session not found; cannot retry (outside loop). Treating as error." });
+      stoppedReason = "error";
+      runError = {
+        message: `Session not found: ${cleanedReason}`,
+        code: "session_not_found",
+      };
     } else {
       stoppedReason = "error";
       const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
@@ -798,9 +952,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
 
     // Update issue status
+    // Skip if the model already explicitly set it via tool
     let nextStatus: string | null = null;
     let statusReason: string | null = null;
-    if (stoppedReason === "completed") {
+    if (modelUpdatedIssueStatus) {
+      emit(onLog, { kind: "system", ts: ts(), text: `[openai-proxy] Model already updated issue status via tool. Skipping post-loop status update.` });
+    } else if (stoppedReason === "completed") {
       nextStatus = "done";
     } else if (stoppedReason === "max_turns") {
       // Do NOT mark as blocked — the heartbeat simply ran out of turns.
@@ -872,12 +1029,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   return {
-    exitCode: isError || isMaxTurns ? 1 : 0,
+    exitCode: isError ? 1 : 0,
     signal: null,
     timedOut: false,
     errorMessage: runError ? runError.message : isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
     errorCode: runError ? runError.code : isMaxTurns ? "max_turns_exhausted" : null,
-    errorFamily: isMaxTurns || hasTransientError ? "transient_upstream" : null,
+    errorFamily: hasTransientError ? "transient_upstream" : null,
     retryNotBefore: hasTransientError ? (runError as any).retryNotBefore ?? null : null,
     resultJson: buildResultJson(),
     usage: totalUsage,
@@ -895,5 +1052,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
       ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),
     },
+    summary: finalText.slice(0, 500),
   };
 }

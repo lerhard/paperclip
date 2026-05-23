@@ -109,14 +109,14 @@ function updateIssueStatusTool(ctx: BuildToolsContext): Tool {
       type: "function",
       function: {
         name: "update_issue_status",
-        description: "Move issue to new status: open|in_progress|blocked|done|cancelled. Defaults to current.",
+        description: "Move issue to new status: backlog|todo|in_progress|in_review|done|blocked|cancelled. Defaults to current.",
         parameters: {
           type: "object",
           properties: {
             issue_id: { type: "string", description: "Issue id. Omit for current." },
             status: {
               type: "string",
-              enum: ["open", "in_progress", "blocked", "done", "cancelled"],
+              enum: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
             },
             reason: { type: "string", description: "Optional reason." },
           },
