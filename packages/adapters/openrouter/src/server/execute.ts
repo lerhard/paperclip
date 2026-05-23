@@ -97,7 +97,7 @@ const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done + summary.";
 const FREE_TIER_TURN_DELAY_MS = 1500; // proactive delay to avoid rate limits
 
 const TRANSIENT_UPSTREAM_RE =
-  /(?:rate[-\s]?limit(?:ed)?|rate_limit_error|too\s+many\s+requests|\b429\b|overloaded(?:_error)?|server\s+overloaded|service\s+unavailable|\b503\b|\b529\b|high\s+demand|try\s+again\s+later|temporarily\s+unavailable|throttl(?:ed|ing)|throttlingexception|servicequotaexceededexception|out\s+of\s+extra\s+usage|extra\s+usage\b|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached)/i;
+  /(?:rate[-\s]?limit(?:ed)?|rate_limit_error|too\s+many\s+requests|\b429\b|overloaded(?:_error)?|server\s+overloaded|service\s+unavailable|\b502\b|\b503\b|\b529\b|provider\s+returned\s+error|high\s+demand|try\s+again\s+later|temporarily\s+unavailable|throttl(?:ed|ing)|throttlingexception|servicequotaexceededexception|out\s+of\s+extra\s+usage|extra\s+usage\b|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached)/i;
 
 const API_STDERR_NOISE_RE =
   /^\d{4}-\d{2}-\d{2}T[^\s]+\s+(?:DEBUG|INFO)\s+.*$/i;
@@ -685,9 +685,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Tool result cache: avoid re-executing same tool with same args across turns
   const toolResultCache = new Map<string, { content: string; isError: boolean }>();
 
+  await emitSystem(onLog, `[openrouter] Starting tool loop: maxTurns=${maxTurns}, tools=${tools.length}, authToken=${!!authToken}`);
+
   try {
     while (turn < maxTurns) {
       turn += 1;
+      await emitSystem(onLog, `[Turn ${turn}/${maxTurns}] Starting...`);
 
       // Proactive delay for free tier: respect rate limits before hitting them
       if (turn > 1 && isFreeTierModel(model)) {
@@ -768,6 +771,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       const choice = response.choices?.[0];
       if (!choice) {
+        await writeRawStderr(onLog, `[openrouter] ERROR: OpenRouter returned no choices in response. Response: ${JSON.stringify(response).slice(0, 500)}`);
         runError = { message: "OpenRouter returned no choices", code: "openrouter_empty_response" };
         stoppedReason = "error";
         break;
@@ -795,6 +799,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       // No tool calls => model is done. Early-exit if text clearly signals completion.
       if (toolCalls.length === 0) {
+        if (!text && !effectiveReasoning) {
+          await writeRawStderr(onLog, `[openrouter] WARNING: Model returned empty response (no text, no reasoning, no tool calls). Treating as completion.`);
+        }
         stoppedReason = "completed";
         break;
       }
@@ -950,10 +957,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       stoppedReason = "max_turns";
       await writeRawStderr(onLog, `[openrouter] hit max_turns (${maxTurns}), stopping`);
     }
+
+    // Log final loop state for debugging silent failures
+    await emitSystem(onLog, `[openrouter] Loop exited: turn=${turn}, stoppedReason=${stoppedReason}, finalAssistantText=${finalAssistantText.length > 0 ? "present" : "EMPTY"}`);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     runError = { message: reason, code: "openrouter_loop_failed" };
     stoppedReason = "error";
+    await writeRawStderr(onLog, `[openrouter] Loop exception: ${reason}`);
   }
 
   // ----- post-loop: cost, comment, status -----
