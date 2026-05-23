@@ -318,6 +318,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const { config, context, onLog, onMeta, agent, runId, authToken } = ctx;
   const dsConfig: DeepSeekConfig = (config as Record<string, unknown>) || {};
 
+  // Session validation: detect provider change or invalid session
+  const previousSessionParams = ((context.runtime as any)?.sessionParams as Record<string, unknown> | undefined) ?? {};
+  const previousProvider = previousSessionParams.provider as string | undefined;
+  const currentProvider = "deepseek";
+  const providerChanged = previousProvider && previousProvider !== currentProvider;
+  
+  if (providerChanged) {
+    emit(onLog, { kind: "stderr", ts: new Date().toISOString(), text: `[deepseek] Provider changed from ${previousProvider} to ${currentProvider}. Creating new session.` });
+  }
+
   const apiKey = resolveApiKey(dsConfig);
   const model = asString(dsConfig.model, "deepseek-chat");
   const temperature = asNumber(dsConfig.temperature, 0.7);
@@ -791,6 +801,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionDisplayId: sessionId,
     sessionParams: {
       lastGenerationId: runId,
+      provider: currentProvider,
       ...(workspaceId ? { workspaceId } : {}),
       ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
       ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),

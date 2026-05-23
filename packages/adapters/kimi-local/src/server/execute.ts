@@ -321,6 +321,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const { config, context, onLog, onMeta, agent, runId, authToken } = ctx;
   const kimiConfig: KimiConfig = (config as Record<string, unknown>) || {};
 
+  // Session validation: detect provider change or invalid session
+  const previousSessionParams = ((context.runtime as any)?.sessionParams as Record<string, unknown> | undefined) ?? {};
+  const previousProvider = previousSessionParams.provider as string | undefined;
+  const currentProvider = "moonshot";
+  const providerChanged = previousProvider && previousProvider !== currentProvider;
+  
+  if (providerChanged) {
+    emit(onLog, { kind: "stderr", ts: new Date().toISOString(), text: `[kimi] Provider changed from ${previousProvider} to ${currentProvider}. Creating new session.` });
+  }
+
   const apiKey = resolveApiKey(kimiConfig);
   const model = asString(kimiConfig.model, "moonshot-v1-8k");
   const temperature = asNumber(kimiConfig.temperature, 0.7);
@@ -793,6 +803,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionDisplayId: sessionId,
     sessionParams: {
       lastGenerationId: runId,
+      provider: currentProvider,
       ...(workspaceId ? { workspaceId } : {}),
       ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
       ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),

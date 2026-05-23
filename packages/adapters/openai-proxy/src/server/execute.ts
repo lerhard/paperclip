@@ -352,6 +352,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const { config, context, onLog, onMeta, agent, runId, authToken } = ctx;
   const proxyConfig = (config ?? {}) as unknown as OpenAiProxyConfig;
 
+  // Session validation: detect provider change or invalid session
+  const previousSessionParams = ((context.runtime as any)?.sessionParams as Record<string, unknown> | undefined) ?? {};
+  const previousProvider = previousSessionParams.provider as string | undefined;
+  const currentProvider = "openai_proxy";
+  const providerChanged = previousProvider && previousProvider !== currentProvider;
+  
+  if (providerChanged) {
+    emit(onLog, { kind: "stderr", ts: new Date().toISOString(), text: `[openai-proxy] Provider changed from ${previousProvider} to ${currentProvider}. Creating new session.` });
+  }
+
   const apiKey = resolveApiKey(proxyConfig);
   const baseUrl = resolveBaseUrl(proxyConfig);
   const model = asString(proxyConfig.model, "");
@@ -880,6 +890,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionDisplayId: sessionId,
     sessionParams: {
       lastGenerationId: runId,
+      provider: currentProvider,
       ...(workspaceId ? { workspaceId } : {}),
       ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
       ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),

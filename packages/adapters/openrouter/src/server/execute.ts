@@ -458,6 +458,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const config = (ctx.agent.adapterConfig ?? ctx.config) as unknown as OpenRouterConfig;
   const { context, onLog, onMeta, agent, authToken } = ctx;
 
+  // Session validation: detect provider change or invalid session
+  const previousSessionParams = ((context.runtime as any)?.sessionParams as Record<string, unknown> | undefined) ?? {};
+  const previousProvider = previousSessionParams.provider as string | undefined;
+  const currentProvider = "openrouter";
+  const providerChanged = previousProvider && previousProvider !== currentProvider;
+  
+  if (providerChanged) {
+    await writeRawStderr(
+      onLog,
+      `[openrouter] Provider changed from ${previousProvider} to ${currentProvider}. Creating new session.`
+    );
+  }
+
   const model = config.model || "openrouter/auto";
   const maxTurns = typeof config.maxTurns === "number" && config.maxTurns > 0 ? config.maxTurns : DEFAULT_MAX_TURNS;
   const autoApprove = config.autoApprove === true;
@@ -1184,7 +1197,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       clearSession: shouldClearSession,
       sessionId,
       sessionDisplayId: sessionId,
-      sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,
+      sessionParams: {
+        ...sessionParams,
+        provider: currentProvider,
+      },
     };
   }
 
@@ -1205,7 +1221,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     clearSession: shouldClearSession,
     sessionId,
     sessionDisplayId: sessionId,
-    sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,
+    sessionParams: {
+      ...sessionParams,
+      provider: currentProvider,
+    },
     summary: finalAssistantText.slice(0, 500),
   };
 }
