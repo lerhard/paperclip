@@ -26,6 +26,8 @@ import type {
 import fs from "node:fs/promises";
 import {
   renderPaperclipWakePrompt,
+  parseObject,
+  asString,
 } from "@paperclipai/adapter-utils/server-utils";
 
 import {
@@ -91,6 +93,37 @@ interface ChatCompletionResponse {
 const DEFAULT_MAX_TURNS = 12;
 const DEFAULT_SYSTEM_PROMPT = "Exec tools only. End status=done + summary.";
 const FREE_TIER_TURN_DELAY_MS = 1500; // proactive delay to avoid rate limits
+
+const TRANSIENT_UPSTREAM_RE =
+  /(?:rate[-\s]?limit(?:ed)?|rate_limit_error|too\s+many\s+requests|\b429\b|overloaded(?:_error)?|server\s+overloaded|service\s+unavailable|\b503\b|\b529\b|high\s+demand|try\s+again\s+later|temporarily\s+unavailable|throttl(?:ed|ing)|throttlingexception|servicequotaexceededexception|out\s+of\s+extra\s+usage|extra\s+usage\b|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached)/i;
+
+const API_STDERR_NOISE_RE =
+  /^\d{4}-\d{2}-\d{2}T[^\s]+\s+(?:DEBUG|INFO)\s+.*$/i;
+
+function isTransientError(errText: string): boolean {
+  return TRANSIENT_UPSTREAM_RE.test(errText);
+}
+
+function extractRetryNotBefore(errText: string): string | null {
+  const relativeMatch = errText.match(/in\s+(\d+)\s*(minute|hour|second)s?/i);
+  if (relativeMatch) {
+    const amount = parseInt(relativeMatch[1] ?? "0", 10);
+    const unit = relativeMatch[2]?.toLowerCase() ?? "minute";
+    const ms = unit.startsWith("hour") ? amount * 3600_000 : unit.startsWith("second") ? amount * 1000 : amount * 60_000;
+    return new Date(Date.now() + ms).toISOString();
+  }
+  return null;
+}
+
+function cleanStderr(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      return trimmed && !API_STDERR_NOISE_RE.test(trimmed);
+    })
+    .join("\n");
+}
 
 function isFreeTierModel(model: string): boolean {
   return model.endsWith(":free") || model === "openrouter/auto";
@@ -419,7 +452,7 @@ async function fetchGenerationCost(
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const config = (ctx.agent.adapterConfig ?? ctx.config) as unknown as OpenRouterConfig;
-  const { context, onLog, agent, authToken } = ctx;
+  const { context, onLog, onMeta, agent, authToken } = ctx;
 
   const model = config.model || "openrouter/auto";
   const maxTurns = typeof config.maxTurns === "number" && config.maxTurns > 0 ? config.maxTurns : DEFAULT_MAX_TURNS;
@@ -515,10 +548,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   } catch {
     wakePrompt = "";
   }
+  const userContent = wakePrompt || JSON.stringify(context);
   messages.push({
     role: "user",
-    content: wakePrompt || JSON.stringify(context),
+    content: userContent,
   });
+
+  if (onMeta) {
+    await onMeta({
+      adapterType: "openrouter",
+      command: model,
+      prompt: `${systemContent}\n\n${userContent}`,
+      promptMetrics: {
+        promptChars: systemContent.length + userContent.length,
+        maxTurns,
+        toolsCount: tools.length,
+      },
+      context: { model },
+    });
+  }
 
   // ----- check out issue (acquire run lock) -----
   //
@@ -673,15 +721,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        const isRateLimit = /\b429\b|rate limit/i.test(reason);
-        const isServerError = /\b5\d\d\b|server error/i.test(reason);
-        const isTransient = isRateLimit || isServerError;
-        runError = { message: reason, code: isRateLimit ? "rate_limit_exhausted" : isServerError ? "server_error" : "openrouter_request_failed" };
+        const cleanedReason = cleanStderr(reason);
+        const isTransientErr = isTransientError(cleanedReason);
+        const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
+        runError = { message: cleanedReason, code: isTransientErr ? "transient_upstream" : "openrouter_request_failed" };
         stoppedReason = "error";
-        if (isTransient) {
-          // Attach transient metadata so the heartbeat can schedule a retry
+        if (isTransientErr) {
           (runError as any).errorFamily = "transient_upstream";
-          (runError as any).retryNotBefore = Date.now() + (isRateLimit ? 60_000 : 30_000);
+          (runError as any).retryNotBefore = extractedRetry ?? new Date(Date.now() + 60_000).toISOString();
         }
         break;
       }
@@ -976,17 +1023,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     sessionParams.openrouterRateLimits = rateLimits;
   }
 
+  const workspaceContext = parseObject(context.paperclipWorkspace);
+  const workspaceId = asString((workspaceContext as any).workspaceId, "");
+  const workspaceRepoUrl = asString((workspaceContext as any).repoUrl, "");
+  const workspaceRepoRef = asString((workspaceContext as any).repoRef, "");
+  if (workspaceId) sessionParams.workspaceId = workspaceId;
+  if (workspaceRepoUrl) sessionParams.repoUrl = workspaceRepoUrl;
+  if (workspaceRepoRef) sessionParams.repoRef = workspaceRepoRef;
+
   const isMaxTurns = stoppedReason === "max_turns";
+  const isError = stoppedReason === "error";
+  const hasTransientError = isError && (runError as any)?.errorFamily === "transient_upstream";
+  const shouldClearSession = isMaxTurns || (isError && !hasTransientError);
+
   if (stoppedReason === "error" && runError) {
-    const isTransient = (runError as any).errorFamily === "transient_upstream";
     return {
       exitCode: 1,
       signal: null,
       timedOut: false,
       errorMessage: runError.message,
       errorCode: runError.code,
-      errorFamily: isTransient ? "transient_upstream" : null,
-      retryNotBefore: isTransient ? (runError as any).retryNotBefore ?? null : null,
+      errorFamily: hasTransientError ? "transient_upstream" : null,
+      retryNotBefore: hasTransientError ? (runError as any).retryNotBefore ?? null : null,
       resultJson: { stopReason: runError.code, detail: runError.message },
       usage: totalUsage,
       model,
@@ -994,6 +1052,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       biller: "openrouter",
       billingType: resolveBillingType(config),
       costUsd,
+      clearSession: shouldClearSession,
       sessionId: lastGenerationId ?? null,
       sessionDisplayId: lastGenerationId ?? null,
       sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,
@@ -1007,13 +1066,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     errorMessage: isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
     errorCode: isMaxTurns ? "max_turns_exhausted" : null,
     errorFamily: isMaxTurns ? "transient_upstream" : null,
-    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : null,
+    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : { stopReason: "completed" },
     usage: totalUsage,
     model,
     provider: "openrouter",
     biller: "openrouter",
     billingType: resolveBillingType(config),
     costUsd,
+    clearSession: shouldClearSession,
     sessionId: lastGenerationId ?? null,
     sessionDisplayId: lastGenerationId ?? null,
     sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,

@@ -2,7 +2,7 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
-import { renderPaperclipWakePrompt } from "@paperclipai/adapter-utils/server-utils";
+import { renderPaperclipWakePrompt, parseObject } from "@paperclipai/adapter-utils/server-utils";
 import type { OpenAiProxyConfig } from "../index.js";
 import { buildTools, buildToolSchemas, findTool } from "./tools.js";
 import { loadSkills, renderSkillsForPrompt } from "./skills.js";
@@ -56,6 +56,37 @@ Rules:
 const TURN_DELAY_MS = 800;
 const DEFAULT_MAX_TURNS = 50;
 const DEFAULT_MAX_CONTEXT = 20;
+
+const TRANSIENT_UPSTREAM_RE =
+  /(?:rate[-\s]?limit(?:ed)?|rate_limit_error|too\s+many\s+requests|\b429\b|overloaded(?:_error)?|server\s+overloaded|service\s+unavailable|\b503\b|\b529\b|high\s+demand|try\s+again\s+later|temporarily\s+unavailable|throttl(?:ed|ing)|throttlingexception|servicequotaexceededexception|out\s+of\s+extra\s+usage|extra\s+usage\b|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached)/i;
+
+const API_STDERR_NOISE_RE =
+  /^\d{4}-\d{2}-\d{2}T[^\s]+\s+(?:DEBUG|INFO)\s+.*$/i;
+
+function isTransientError(errText: string): boolean {
+  return TRANSIENT_UPSTREAM_RE.test(errText);
+}
+
+function extractRetryNotBefore(errText: string): string | null {
+  const relativeMatch = errText.match(/in\s+(\d+)\s*(minute|hour|second)s?/i);
+  if (relativeMatch) {
+    const amount = parseInt(relativeMatch[1] ?? "0", 10);
+    const unit = relativeMatch[2]?.toLowerCase() ?? "minute";
+    const ms = unit.startsWith("hour") ? amount * 3600_000 : unit.startsWith("second") ? amount * 1000 : amount * 60_000;
+    return new Date(Date.now() + ms).toISOString();
+  }
+  return null;
+}
+
+function cleanStderr(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      return trimmed && !API_STDERR_NOISE_RE.test(trimmed);
+    })
+    .join("\n");
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -300,7 +331,7 @@ async function fetchWithRetry(
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const { config, context, onLog, agent, runId, authToken } = ctx;
+  const { config, context, onLog, onMeta, agent, runId, authToken } = ctx;
   const proxyConfig = (config ?? {}) as unknown as OpenAiProxyConfig;
 
   const apiKey = resolveApiKey(proxyConfig);
@@ -351,6 +382,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] Skill loading failed: ${reason}` });
   }
 
+  const systemContent = currentIssueId
+    ? `${systemPrompt}${skillsText}\n\nYou are working on issue ${currentIssueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
+    : `${systemPrompt}${skillsText}\n\n${structuredWakePrompt}`;
+
+  if (onMeta) {
+    await onMeta({
+      adapterType: "openai_proxy",
+      command: model,
+      prompt: systemContent,
+      promptMetrics: {
+        promptChars: systemContent.length,
+        maxTurns,
+        toolsCount: tools.length,
+      },
+      context: { model },
+    });
+  }
+
   emit(onLog, {
     kind: "init",
     ts: ts(),
@@ -369,9 +418,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let messages: ChatMessage[] = [
     {
       role: "system",
-      content: currentIssueId
-        ? `${systemPrompt}${skillsText}\n\nYou are working on issue ${currentIssueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
-        : `${systemPrompt}${skillsText}\n\n${structuredWakePrompt}`,
+      content: systemContent,
     },
   ];
 
@@ -651,22 +698,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   } catch (err) {
     stoppedReason = "error";
     const reason = err instanceof Error ? err.message : String(err);
-    const isRateLimit = /\b429\b|rate limit/i.test(reason);
-    const isServerError = /\b5\d\d\b|server error/i.test(reason);
-    const isTransient = isRateLimit || isServerError;
-    finalText = reason;
+    const cleanedReason = cleanStderr(reason);
+    const isTransientErr = isTransientError(cleanedReason);
+    const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
+    finalText = cleanedReason;
     runError = {
-      message: reason,
-      code: isRateLimit ? "rate_limit_exhausted" : isServerError ? "server_error" : "proxy_error",
+      message: cleanedReason,
+      code: isTransientErr ? "transient_upstream" : "proxy_error",
     };
-    if (isTransient) {
+    if (isTransientErr) {
       (runError as any).errorFamily = "transient_upstream";
-      (runError as any).retryNotBefore = Date.now() + (isRateLimit ? 60_000 : 30_000);
+      (runError as any).retryNotBefore = extractedRetry ?? new Date(Date.now() + 60_000).toISOString();
     }
     emit(onLog, {
       kind: "stderr",
       ts: ts(),
-      text: `[openai-proxy] Error: ${reason}`,
+      text: `[openai-proxy] Error: ${cleanedReason}`,
     });
   }
 
@@ -723,21 +770,38 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const isMaxTurns = stoppedReason === "max_turns";
   const isError = stoppedReason === "error";
-  const isTransientError = isError && (runError as any)?.errorFamily === "transient_upstream";
+  const hasTransientError = isError && (runError as any)?.errorFamily === "transient_upstream";
+  const shouldClearSession = isMaxTurns || (isError && !hasTransientError);
+
+  const workspaceContext = parseObject(context.paperclipWorkspace);
+  const workspaceId = asString((workspaceContext as any).workspaceId, "");
+  const workspaceRepoUrl = asString((workspaceContext as any).repoUrl, "");
+  const workspaceRepoRef = asString((workspaceContext as any).repoRef, "");
+
   return {
     exitCode: isError || isMaxTurns ? 1 : 0,
     signal: null,
     timedOut: false,
     errorMessage: runError ? runError.message : isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
     errorCode: runError ? runError.code : isMaxTurns ? "max_turns_exhausted" : null,
-    errorFamily: isMaxTurns || isTransientError ? "transient_upstream" : null,
-    retryNotBefore: isTransientError ? (runError as any).retryNotBefore ?? null : null,
-    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : isError ? { stopReason: runError?.code, detail: runError?.message } : undefined,
+    errorFamily: isMaxTurns || hasTransientError ? "transient_upstream" : null,
+    retryNotBefore: hasTransientError ? (runError as any).retryNotBefore ?? null : null,
+    resultJson: isMaxTurns
+      ? { stopReason: "max_turns_exhausted" }
+      : isError
+        ? { stopReason: runError?.code, detail: runError?.message }
+        : { stopReason: "completed" },
     usage: totalUsage,
     model,
     provider: "openai_proxy",
     biller: "openai_proxy",
     billingType: "api",
-    sessionParams: { lastGenerationId: runId },
+    clearSession: shouldClearSession,
+    sessionParams: {
+      lastGenerationId: runId,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
+      ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),
+    },
   };
 }

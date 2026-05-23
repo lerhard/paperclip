@@ -2,7 +2,7 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
-import { renderPaperclipWakePrompt } from "@paperclipai/adapter-utils/server-utils";
+import { renderPaperclipWakePrompt, parseObject } from "@paperclipai/adapter-utils/server-utils";
 import { KIMI_CHAT_ENDPOINT, type KimiConfig } from "../index.js";
 import { buildTools, buildToolSchemas, findTool } from "./tools.js";
 
@@ -45,8 +45,45 @@ const DEFAULT_MAX_TURNS = 8;
 const DEFAULT_MAX_CONTEXT = 10;
 const HARD_MESSAGE_CAP = 80;
 
+// Transient error detection: broader than just 429/5xx
+const TRANSIENT_UPSTREAM_RE =
+  /(?:rate[-\s]?limit(?:ed)?|rate_limit_error|too\s+many\s+requests|\b429\b|overloaded(?:_error)?|server\s+overloaded|service\s+unavailable|\b503\b|\b529\b|high\s+demand|try\s+again\s+later|temporarily\s+unavailable|throttl(?:ed|ing)|throttlingexception|servicequotaexceededexception|out\s+of\s+extra\s+usage|extra\s+usage\b|usage\s+limit\s+reached|usage\s+cap\s+reached|5[-\s]?hour\s+limit\s+reached|weekly\s+limit\s+reached)/i;
+
+const RETRY_NOT_BEFORE_RE =
+  /(?:resets?|try\s+again|retry)\s+(?:at\s+)?([\d]{1,2}[:\d]{0,2}\s*(?:am|pm)|in\s+(\d+)\s*(minute|hour|second)s?|(?:after|in)\s+([\d]+)\s*(?:minute|hour|second)s?)/i;
+
+const API_STDERR_NOISE_RE =
+  /^\d{4}-\d{2}-\d{2}T[^\s]+\s+(?:DEBUG|INFO)\s+.*$/i;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function isTransientError(errText: string): boolean {
+  return TRANSIENT_UPSTREAM_RE.test(errText);
+}
+
+function extractRetryNotBefore(errText: string): string | null {
+  const match = errText.match(RETRY_NOT_BEFORE_RE);
+  if (!match) return null;
+  const relativeMatch = errText.match(/in\s+(\d+)\s*(minute|hour|second)s?/i);
+  if (relativeMatch) {
+    const amount = parseInt(relativeMatch[1] ?? "0", 10);
+    const unit = relativeMatch[2]?.toLowerCase() ?? "minute";
+    const ms = unit.startsWith("hour") ? amount * 3600_000 : unit.startsWith("second") ? amount * 1000 : amount * 60_000;
+    return new Date(Date.now() + ms).toISOString();
+  }
+  return null;
+}
+
+function cleanStderr(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      return trimmed && !API_STDERR_NOISE_RE.test(trimmed);
+    })
+    .join("\n");
 }
 
 function emit(
@@ -273,7 +310,7 @@ async function fetchWithRetry(
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const { config, context, onLog, agent, runId, authToken } = ctx;
+  const { config, context, onLog, onMeta, agent, runId, authToken } = ctx;
   const kimiConfig: KimiConfig = (config as Record<string, unknown>) || {};
 
   const apiKey = resolveApiKey(kimiConfig);
@@ -310,6 +347,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
   ];
+
+  if (onMeta) {
+    await onMeta({
+      adapterType: "kimi_local",
+      command: model,
+      prompt: `${systemPrompt}\n\n${userPrompt}`,
+      promptMetrics: {
+        promptChars: systemPrompt.length + userPrompt.length,
+        maxTurns,
+        toolsCount: tools.length,
+      },
+      context: { model },
+    });
+  }
 
   const ts = () => new Date().toISOString();
 
@@ -554,18 +605,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   } catch (err) {
     stoppedReason = "error";
     const reason = err instanceof Error ? err.message : String(err);
-    const isRateLimit = /\b429\b|rate limit/i.test(reason);
-    const isServerError = /\b5\d\d\b|server error/i.test(reason);
-    const isTransient = isRateLimit || isServerError;
+    const cleanedReason = cleanStderr(reason);
+    const isTransientErr = isTransientError(cleanedReason);
+    const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
     runError = {
-      message: reason,
-      code: isRateLimit ? "rate_limit_exhausted" : isServerError ? "server_error" : "kimi_error",
+      message: cleanedReason,
+      code: isTransientErr ? "transient_upstream" : "kimi_error",
     };
-    if (isTransient) {
+    if (isTransientErr) {
       (runError as any).errorFamily = "transient_upstream";
-      (runError as any).retryNotBefore = Date.now() + (isRateLimit ? 60_000 : 30_000);
+      (runError as any).retryNotBefore = extractedRetry ?? new Date(Date.now() + 60_000).toISOString();
     }
-    emit(onLog, { kind: "stderr", ts: ts(), text: `[kimi] Error: ${reason}` });
+    emit(onLog, { kind: "stderr", ts: ts(), text: `[kimi] Error: ${cleanedReason}` });
   }
 
   // ----- post-loop: comment + status -----
@@ -612,7 +663,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const isMaxTurns = stoppedReason === "max_turns";
   const isError = stoppedReason === "error";
-  const isTransientError = isError && (runError as any)?.errorFamily === "transient_upstream";
+  const hasTransientError = isError && (runError as any)?.errorFamily === "transient_upstream";
+  const shouldClearSession = isMaxTurns || (isError && !hasTransientError);
+
+  const workspaceContext = parseObject(context.paperclipWorkspace);
+  const workspaceId = asString((workspaceContext as any).workspaceId, "");
+  const workspaceRepoUrl = asString((workspaceContext as any).repoUrl, "");
+  const workspaceRepoRef = asString((workspaceContext as any).repoRef, "");
 
   emit(onLog, {
     kind: "result",
@@ -633,14 +690,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     timedOut: false,
     errorMessage: runError ? runError.message : isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
     errorCode: runError ? runError.code : isMaxTurns ? "max_turns_exhausted" : null,
-    errorFamily: isMaxTurns || isTransientError ? "transient_upstream" : null,
-    retryNotBefore: isTransientError ? (runError as any).retryNotBefore ?? null : null,
-    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : isError ? { stopReason: runError?.code, detail: runError?.message } : undefined,
+    errorFamily: isMaxTurns || hasTransientError ? "transient_upstream" : null,
+    retryNotBefore: hasTransientError ? (runError as any).retryNotBefore ?? null : null,
+    resultJson: isMaxTurns
+      ? { stopReason: "max_turns_exhausted" }
+      : isError
+        ? { stopReason: runError?.code, detail: runError?.message }
+        : { stopReason: "completed" },
     usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens },
     model,
     provider: "moonshot",
     biller: "moonshot",
     billingType: "api",
-    sessionParams: { lastGenerationId: runId },
+    clearSession: shouldClearSession,
+    sessionParams: {
+      lastGenerationId: runId,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(workspaceRepoUrl ? { repoUrl: workspaceRepoUrl } : {}),
+      ...(workspaceRepoRef ? { repoRef: workspaceRepoRef } : {}),
+    },
   };
 }
