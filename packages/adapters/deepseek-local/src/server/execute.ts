@@ -2,6 +2,7 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
+import fs from "node:fs/promises";
 import {
   renderPaperclipWakePrompt,
   parseObject,
@@ -11,6 +12,7 @@ import {
 } from "@paperclipai/adapter-utils/server-utils";
 import { DEEPSEEK_CHAT_ENDPOINT, type DeepSeekConfig } from "../index.js";
 import { buildTools, buildToolSchemas, findTool } from "./tools.js";
+import { compressToolResult } from "./compression.js";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -341,7 +343,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     issueTitle: typeof context.issueTitle === "string" ? context.issueTitle : "",
     model,
   };
-  const renderedSystemPrompt = renderTemplate(promptTemplate, templateData);
+  let renderedSystemPrompt = renderTemplate(promptTemplate, templateData);
+
+  // If instructionsFilePath is set, read the file and use it as the base.
+  const instructionsFilePath = (config as unknown as Record<string, unknown>).instructionsFilePath;
+  if (typeof instructionsFilePath === "string" && instructionsFilePath.trim().length > 0) {
+    try {
+      const fileContent = await fs.readFile(instructionsFilePath.trim(), "utf8");
+      if (fileContent.trim().length > 0) {
+        renderedSystemPrompt = fileContent.trim();
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      emit(onLog, { kind: "stderr", ts: new Date().toISOString(), text: `[deepseek] could not read instructionsFilePath ${instructionsFilePath}: ${reason}. Falling back to promptTemplate.` });
+    }
+  }
+
+  // Compression config (mirrors openrouter)
+  const compressToolResults = (config as any).compressToolResults === true;
+  const useRTK = (config as any).useRTK === true;
+  const useCaveman = (config as any).useCaveman === true;
 
   const tools = hasAuthToken
     ? buildTools({
@@ -581,13 +602,29 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             }
           }
 
-          messages.push({ role: "tool", content: result.content, tool_call_id: toolCall.id });
+          // Apply compression if enabled (mirrors openrouter)
+          let compressedContent = result.content;
+          if (compressToolResults && result.content.length > 100) {
+            try {
+              const parsed = JSON.parse(result.content);
+              compressedContent = compressToolResult(parsed, { useTOON: true, useRTK, useCaveman: false, useVarman: true });
+            } catch {
+              compressedContent = compressToolResult(result.content, { useTOON: false, useRTK: false, useCaveman, useVarman: !useCaveman });
+            }
+            const saved = result.content.length - compressedContent.length;
+            if (saved > 0) {
+              const pct = Math.round((saved / result.content.length) * 100);
+              emit(onLog, { kind: "system", ts: ts(), text: `[deepseek] Compressed ${toolName} result: ${result.content.length.toLocaleString()} → ${compressedContent.length.toLocaleString()} bytes (${pct}% saved)` });
+            }
+          }
+
+          messages.push({ role: "tool", content: compressedContent, tool_call_id: toolCall.id });
           emit(onLog, {
             kind: "tool_result",
             ts: ts(),
             toolUseId: toolCall.id,
             toolName,
-            content: result.content,
+            content: compressedContent,
             isError: result.isError,
           });
 

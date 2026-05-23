@@ -2,6 +2,7 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
+import fs from "node:fs/promises";
 import {
   renderPaperclipWakePrompt,
   parseObject,
@@ -391,7 +392,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     issueTitle: typeof context.issueTitle === "string" ? context.issueTitle : "",
     model,
   };
-  const renderedSystemPrompt = renderTemplate(promptTemplate, templateData);
+  let renderedSystemPrompt = renderTemplate(promptTemplate, templateData);
+
+  // If instructionsFilePath is set, read the file and use it as the base.
+  const instructionsFilePath = (config as unknown as Record<string, unknown>).instructionsFilePath;
+  if (typeof instructionsFilePath === "string" && instructionsFilePath.trim().length > 0) {
+    try {
+      const fileContent = await fs.readFile(instructionsFilePath.trim(), "utf8");
+      if (fileContent.trim().length > 0) {
+        renderedSystemPrompt = fileContent.trim();
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      emit(onLog, { kind: "stderr", ts: new Date().toISOString(), text: `[openai-proxy] could not read instructionsFilePath ${instructionsFilePath}: ${reason}. Falling back to promptTemplate.` });
+    }
+  }
 
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx);
   const ts = () => new Date().toISOString();
