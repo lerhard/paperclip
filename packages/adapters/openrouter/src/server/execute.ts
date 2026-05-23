@@ -87,6 +87,8 @@ interface ChatCompletionResponse {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
   };
 }
 
@@ -693,11 +695,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   let lastGenerationId: string | undefined;
-  let totalUsage: UsageSummary = { inputTokens: 0, outputTokens: 0 };
+  let totalUsage: UsageSummary = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
   let finalAssistantText = "";
   let turn = 0;
   let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
   let runError: { message: string; code: string } | null = null;
+  
+  // Session management: generate a stable sessionId for this run
+  // OpenRouter doesn't have persistent sessions, so we use runId as the session identifier
+  const sessionId = ctx.runId;
   // Repeat-call detection: if the model calls the same tool with the same args
   // three times in a row, break the loop. Prevents 20+ retries when the model
   // misreads an error message and keeps "fixing" it the same wrong way.
@@ -790,6 +796,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         totalUsage = {
           inputTokens: totalUsage.inputTokens + (response.usage.prompt_tokens ?? 0),
           outputTokens: totalUsage.outputTokens + (response.usage.completion_tokens ?? 0),
+          cachedInputTokens: (totalUsage.cachedInputTokens ?? 0) + (response.usage.cache_read_input_tokens ?? 0),
         };
       }
 
@@ -1128,6 +1135,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const hasTransientError = isError && (runError as any)?.errorFamily === "transient_upstream";
   const shouldClearSession = isMaxTurns || (isError && !hasTransientError);
 
+  // Build comprehensive resultJson (mirrors Claude structure)
+  const buildResultJson = (): Record<string, unknown> => {
+    const base: Record<string, unknown> = {
+      stopReason: isMaxTurns ? "max_turns_exhausted" : stoppedReason === "error" ? runError?.code : "completed",
+      turnsCompleted: turn,
+      finalTextLength: finalAssistantText.length,
+      usage: {
+        inputTokens: totalUsage.inputTokens,
+        outputTokens: totalUsage.outputTokens,
+        cachedInputTokens: totalUsage.cachedInputTokens ?? 0,
+      },
+    };
+    
+    if (hasTransientError) {
+      base.errorFamily = "transient_upstream";
+      base.retryNotBefore = (runError as any)?.retryNotBefore ?? null;
+    }
+    
+    if (stoppedReason === "repeat_loop" && runError) {
+      base.repeatLoopDetected = true;
+      base.repeatLoopMessage = runError.message;
+    }
+    
+    if (stoppedReason === "error" && runError) {
+      base.errorDetail = runError.message;
+    }
+    
+    return base;
+  };
+
   if (stoppedReason === "error" && runError) {
     return {
       exitCode: 1,
@@ -1137,7 +1174,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorCode: runError.code,
       errorFamily: hasTransientError ? "transient_upstream" : null,
       retryNotBefore: hasTransientError ? (runError as any).retryNotBefore ?? null : null,
-      resultJson: { stopReason: runError.code, detail: runError.message },
+      resultJson: buildResultJson(),
       usage: totalUsage,
       model,
       provider: "openrouter",
@@ -1145,8 +1182,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       billingType: resolveBillingType(config),
       costUsd,
       clearSession: shouldClearSession,
-      sessionId: lastGenerationId ?? null,
-      sessionDisplayId: lastGenerationId ?? null,
+      sessionId,
+      sessionDisplayId: sessionId,
       sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,
     };
   }
@@ -1158,7 +1195,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     errorMessage: isMaxTurns ? `Hit max_turns (${maxTurns}) without completing` : null,
     errorCode: isMaxTurns ? "max_turns_exhausted" : null,
     errorFamily: isMaxTurns ? "transient_upstream" : null,
-    resultJson: isMaxTurns ? { stopReason: "max_turns_exhausted" } : { stopReason: "completed" },
+    resultJson: buildResultJson(),
     usage: totalUsage,
     model,
     provider: "openrouter",
@@ -1166,8 +1203,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     billingType: resolveBillingType(config),
     costUsd,
     clearSession: shouldClearSession,
-    sessionId: lastGenerationId ?? null,
-    sessionDisplayId: lastGenerationId ?? null,
+    sessionId,
+    sessionDisplayId: sessionId,
     sessionParams: Object.keys(sessionParams).length > 0 ? sessionParams : null,
     summary: finalAssistantText.slice(0, 500),
   };
