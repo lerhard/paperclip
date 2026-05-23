@@ -802,6 +802,38 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         if (!text && !effectiveReasoning) {
           await writeRawStderr(onLog, `[openrouter] WARNING: Model returned empty response (no text, no reasoning, no tool calls). Treating as completion.`);
         }
+        
+        // Detect if model is generating pseudo-code tool calls (markdown/XML) instead of real JSON tool calls
+        // This happens when model is confused about tool calling format
+        const pseudoCodePatterns = [
+          /<tool_call>/i,
+          /<function=/i,
+          /```\s*(?:json|tool|function)/i,
+          /\[tool_call\]/i,
+          /\{tool_call\}/i,
+        ];
+        const hasPseudoCode = pseudoCodePatterns.some(p => p.test(text));
+        if (hasPseudoCode) {
+          await writeRawStderr(onLog, `[openrouter] WARNING: Model generated pseudo-code tool calls (markdown/XML) instead of JSON. Attempting to parse and recover...`);
+          
+          // Try to extract function name and parameters from pseudo-code
+          // Pattern: <function=name> or function: name or similar
+          const funcNameMatch = text.match(/<function=(\w+)>|function:\s*(\w+)|<function\s+name="?(\w+)"?/i);
+          const funcName = funcNameMatch ? (funcNameMatch[1] || funcNameMatch[2] || funcNameMatch[3]) : null;
+          
+          if (funcName && findTool(tools, funcName)) {
+            // Try to extract parameters (look for <parameter=value> or parameter: value patterns)
+            const paramsMatch = text.match(/<parameter=path>\s*\n\s*([^\n<]+)/i) || text.match(/path[:\s=]+([^\n<]+)/i);
+            const paramValue = paramsMatch ? paramsMatch[1].trim() : "";
+            
+            if (paramValue) {
+              await writeRawStderr(onLog, `[openrouter] Recovered pseudo-code: function=${funcName}, path=${paramValue}`);
+              // Don't break; let the loop continue naturally so the model can try again
+              // (we could auto-execute here, but better to let the model learn the correct format)
+            }
+          }
+        }
+        
         stoppedReason = "completed";
         break;
       }
