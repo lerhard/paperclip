@@ -2,7 +2,13 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
-import { renderPaperclipWakePrompt, parseObject } from "@paperclipai/adapter-utils/server-utils";
+import {
+  renderPaperclipWakePrompt,
+  parseObject,
+  renderTemplate,
+  joinPromptSections,
+  DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+} from "@paperclipai/adapter-utils/server-utils";
 import { KIMI_CHAT_ENDPOINT, type KimiConfig } from "../index.js";
 import { buildTools, buildToolSchemas, findTool } from "./tools.js";
 
@@ -317,7 +323,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const model = asString(kimiConfig.model, "moonshot-v1-8k");
   const temperature = asNumber(kimiConfig.temperature, 0.7);
   const maxTokens = asNumber(kimiConfig.maxTokens, 2048);
-  const systemPrompt = asString(kimiConfig.systemPrompt, DEFAULT_SYSTEM_PROMPT);
   const timeoutSec = asNumber(kimiConfig.timeoutSec, 120);
   const maxTurns = asNumber((config as any).maxTurns, DEFAULT_MAX_TURNS);
   const maxContextMessages = asNumber((config as any).maxContextMessages, DEFAULT_MAX_CONTEXT);
@@ -328,6 +333,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     typeof context.issueId === "string" && context.issueId.trim().length > 0
       ? context.issueId.trim()
       : null;
+
+  // Prompt template system (mirrors claude-local / codex-local)
+  const promptTemplate = asString((config as any).promptTemplate, DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE);
+  const templateData: Record<string, unknown> = {
+    agentId: agent.id,
+    companyId: agent.companyId,
+    runId,
+    issueId: currentIssueId ?? "",
+    issueTitle: typeof context.issueTitle === "string" ? context.issueTitle : "",
+    model,
+  };
+  const renderedSystemPrompt = renderTemplate(promptTemplate, templateData);
 
   const tools = hasAuthToken
     ? buildTools({
@@ -344,7 +361,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const userPrompt = wakePrompt.length > 0 ? wakePrompt : "Continue your work.";
 
   let messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: renderedSystemPrompt },
     { role: "user", content: userPrompt },
   ];
 
@@ -352,9 +369,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     await onMeta({
       adapterType: "kimi_local",
       command: model,
-      prompt: `${systemPrompt}\n\n${userPrompt}`,
+      prompt: `${renderedSystemPrompt}\n\n${userPrompt}`,
       promptMetrics: {
-        promptChars: systemPrompt.length + userPrompt.length,
+        promptChars: renderedSystemPrompt.length + userPrompt.length,
         maxTurns,
         toolsCount: tools.length,
       },
@@ -603,20 +620,32 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       stoppedReason = "max_turns";
     }
   } catch (err) {
-    stoppedReason = "error";
     const reason = err instanceof Error ? err.message : String(err);
     const cleanedReason = cleanStderr(reason);
     const isTransientErr = isTransientError(cleanedReason);
-    const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
-    runError = {
-      message: cleanedReason,
-      code: isTransientErr ? "transient_upstream" : "kimi_error",
-    };
-    if (isTransientErr) {
-      (runError as any).errorFamily = "transient_upstream";
-      (runError as any).retryNotBefore = extractedRetry ?? new Date(Date.now() + 60_000).toISOString();
+
+    // Session/conversation not found => retry with clean messages (mirrors claude/codex)
+    const isSessionUnknown = /session.*not found|conversation.*not found|unknown.*run|run.*not found|no conversation found/i.test(cleanedReason);
+    if (isSessionUnknown && !isTransientErr) {
+      emit(onLog, { kind: "system", ts: ts(), text: "Session not found; retrying with clean messages..." });
+      messages = [
+        { role: "system", content: renderedSystemPrompt },
+        { role: "user", content: userPrompt },
+      ];
+      // Don't set stoppedReason; the while loop will continue naturally
+    } else {
+      stoppedReason = "error";
+      const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
+      runError = {
+        message: cleanedReason,
+        code: isTransientErr ? "transient_upstream" : "kimi_error",
+      };
+      if (isTransientErr) {
+        (runError as any).errorFamily = "transient_upstream";
+        (runError as any).retryNotBefore = extractedRetry ?? new Date(Date.now() + 60_000).toISOString();
+      }
+      emit(onLog, { kind: "stderr", ts: ts(), text: `[kimi] Error: ${cleanedReason}` });
     }
-    emit(onLog, { kind: "stderr", ts: ts(), text: `[kimi] Error: ${cleanedReason}` });
   }
 
   // ----- post-loop: comment + status -----

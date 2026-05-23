@@ -28,6 +28,8 @@ import {
   renderPaperclipWakePrompt,
   parseObject,
   asString,
+  renderTemplate,
+  DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
 } from "@paperclipai/adapter-utils/server-utils";
 
 import {
@@ -504,10 +506,24 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // ----- build messages -----
 
-  const messages: ChatMessage[] = [];
+  let messages: ChatMessage[] = [];
 
   // System prompt = base + skills + optional instructions file
   let systemContent = config.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  // If promptTemplate is set, render it with template data (mirrors claude/codex)
+  const promptTemplate = (config as unknown as Record<string, unknown>).promptTemplate;
+  if (typeof promptTemplate === "string" && promptTemplate.trim().length > 0) {
+    const templateData: Record<string, unknown> = {
+      agentId: agent.id,
+      companyId: agent.companyId,
+      runId: ctx.runId,
+      issueId: (context.issueId as string) ?? "",
+      issueTitle: typeof context.issueTitle === "string" ? context.issueTitle : "",
+      model,
+    };
+    systemContent = renderTemplate(promptTemplate.trim(), templateData);
+  }
 
   // If instructionsFilePath is set, read the file and use it as the base.
   // This mirrors the behavior of claude-local / codex-local / etc., letting
@@ -723,6 +739,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         const reason = err instanceof Error ? err.message : String(err);
         const cleanedReason = cleanStderr(reason);
         const isTransientErr = isTransientError(cleanedReason);
+
+        // Session/conversation not found => retry with clean messages (mirrors claude/codex)
+        const isSessionUnknown = /session.*not found|conversation.*not found|unknown.*run|run.*not found|no conversation found/i.test(cleanedReason);
+        if (isSessionUnknown && !isTransientErr) {
+          await emitSystem(onLog, "Session not found; retrying with clean messages...");
+          messages = [{ role: "system", content: systemContent }];
+          continue;
+        }
+
         const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
         runError = { message: cleanedReason, code: isTransientErr ? "transient_upstream" : "openrouter_request_failed" };
         stoppedReason = "error";

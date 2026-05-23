@@ -2,7 +2,13 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
-import { renderPaperclipWakePrompt, parseObject } from "@paperclipai/adapter-utils/server-utils";
+import {
+  renderPaperclipWakePrompt,
+  parseObject,
+  renderTemplate,
+  joinPromptSections,
+  DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
+} from "@paperclipai/adapter-utils/server-utils";
 import type { OpenAiProxyConfig } from "../index.js";
 import { buildTools, buildToolSchemas, findTool } from "./tools.js";
 import { loadSkills, renderSkillsForPrompt } from "./skills.js";
@@ -86,6 +92,15 @@ function cleanStderr(text: string): string {
       return trimmed && !API_STDERR_NOISE_RE.test(trimmed);
     })
     .join("\n");
+}
+
+function resolveOpenAiProxyBiller(baseUrl: string): string {
+  const lower = baseUrl.toLowerCase();
+  if (lower.includes("openrouter")) return "openrouter";
+  if (lower.includes("azure")) return "azure";
+  if (lower.includes("anthropic")) return "anthropic";
+  if (lower.includes("google")) return "google";
+  return "openai";
 }
 
 function sleep(ms: number): Promise<void> {
@@ -343,7 +358,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const temperature = asNumber(proxyConfig.temperature, 0.7);
   const maxTokens = asNumber(proxyConfig.maxTokens, 2048);
-  const systemPrompt = asString(proxyConfig.systemPrompt, DEFAULT_SYSTEM_PROMPT);
   const timeoutSec = Math.max(30, asNumber(proxyConfig.timeoutSec, 120));
   const maxTurns = asNumber((config as any).maxTurns, DEFAULT_MAX_TURNS);
 
@@ -366,6 +380,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const toolSchemas = buildToolSchemas(tools);
 
   const currentIssueId = (context.issueId as string | null | undefined) ?? null;
+
+  // Prompt template system (mirrors claude-local / codex-local)
+  const promptTemplate = asString((config as any).promptTemplate, DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE);
+  const templateData: Record<string, unknown> = {
+    agentId: agent.id,
+    companyId: agent.companyId,
+    runId,
+    issueId: currentIssueId ?? "",
+    issueTitle: typeof context.issueTitle === "string" ? context.issueTitle : "",
+    model,
+  };
+  const renderedSystemPrompt = renderTemplate(promptTemplate, templateData);
+
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx);
   const ts = () => new Date().toISOString();
 
@@ -383,8 +410,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   const systemContent = currentIssueId
-    ? `${systemPrompt}${skillsText}\n\nYou are working on issue ${currentIssueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
-    : `${systemPrompt}${skillsText}\n\n${structuredWakePrompt}`;
+    ? `${renderedSystemPrompt}${skillsText}\n\nYou are working on issue ${currentIssueId}. Use paperclip_api to update status and add comments.\n\n${structuredWakePrompt}`
+    : `${renderedSystemPrompt}${skillsText}\n\n${structuredWakePrompt}`;
 
   if (onMeta) {
     await onMeta({
@@ -696,25 +723,35 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       finalText += "\n\n[Stopped after max turns]";
     }
   } catch (err) {
-    stoppedReason = "error";
     const reason = err instanceof Error ? err.message : String(err);
     const cleanedReason = cleanStderr(reason);
     const isTransientErr = isTransientError(cleanedReason);
-    const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
-    finalText = cleanedReason;
-    runError = {
-      message: cleanedReason,
-      code: isTransientErr ? "transient_upstream" : "proxy_error",
-    };
-    if (isTransientErr) {
-      (runError as any).errorFamily = "transient_upstream";
-      (runError as any).retryNotBefore = extractedRetry ?? new Date(Date.now() + 60_000).toISOString();
+
+    // Session/conversation not found => retry with clean messages (mirrors claude/codex)
+    const isSessionUnknown = /session.*not found|conversation.*not found|unknown.*run|run.*not found|no conversation found/i.test(cleanedReason);
+    if (isSessionUnknown && !isTransientErr) {
+      emit(onLog, { kind: "system", ts: ts(), text: "Session not found; retrying with clean messages..." });
+      messages = [
+        { role: "system", content: systemContent },
+      ];
+    } else {
+      stoppedReason = "error";
+      const extractedRetry = isTransientErr ? extractRetryNotBefore(cleanedReason) : null;
+      finalText = cleanedReason;
+      runError = {
+        message: cleanedReason,
+        code: isTransientErr ? "transient_upstream" : "proxy_error",
+      };
+      if (isTransientErr) {
+        (runError as any).errorFamily = "transient_upstream";
+        (runError as any).retryNotBefore = extractedRetry ?? new Date(Date.now() + 60_000).toISOString();
+      }
+      emit(onLog, {
+        kind: "stderr",
+        ts: ts(),
+        text: `[openai-proxy] Error: ${cleanedReason}`,
+      });
     }
-    emit(onLog, {
-      kind: "stderr",
-      ts: ts(),
-      text: `[openai-proxy] Error: ${cleanedReason}`,
-    });
   }
 
   // ----- post-loop: comment + status -----
@@ -794,7 +831,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     usage: totalUsage,
     model,
     provider: "openai_proxy",
-    biller: "openai_proxy",
+    biller: resolveOpenAiProxyBiller(baseUrl),
     billingType: "api",
     clearSession: shouldClearSession,
     sessionParams: {
