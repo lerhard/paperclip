@@ -878,6 +878,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         await emitAssistant(onLog, text);
         finalAssistantText = text;
       }
+      // Note: when model sends tool_calls, msg.content is null; finalAssistantText preserves previous verdict
 
       // Handle finish_reason: "length" means the response was truncated by max_tokens.
       // The model was cut off mid-thought — nudge it to continue instead of treating
@@ -900,9 +901,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       // No tool calls => check whether we should treat this as completion.
       if (toolCalls.length === 0) {
         if (!text && !effectiveReasoning) {
-          await writeRawStderr(onLog, `[openrouter] WARNING: Model returned empty response (no text, no reasoning, no tool calls). Treating as completion.`);
-          stoppedReason = "completed";
-          break;
+          // Empty response is NOT completion — model is stuck or confused.
+          // Nudge it to continue instead of falsely marking done.
+          await writeRawStderr(onLog, `[openrouter] WARNING: Model returned empty response (no text, no reasoning, no tool calls). Nudging model to continue...`);
+          messages.push({ role: "assistant", content: "" });
+          messages.push({
+            role: "user",
+            content: "SYSTEM: You returned an empty response. Please continue working on the issue using the available tools.",
+          });
+          consecutiveTextOnlyTurns++;
+          if (consecutiveTextOnlyTurns >= MAX_TEXT_ONLY_TURNS) {
+            await writeRawStderr(onLog, `[openrouter] Model responded ${MAX_TEXT_ONLY_TURNS}x with empty/text only. Treating as error.`);
+            runError = {
+              message: `Model responded ${MAX_TEXT_ONLY_TURNS} times with empty or non-tool responses without completing.`,
+              code: "empty_response_loop",
+            };
+            stoppedReason = "error";
+            break;
+          }
+          continue;
         }
         
         // Detect if model is generating pseudo-code tool calls (markdown/XML) instead of real JSON tool calls
@@ -937,14 +954,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           continue;
         }
 
-        // Check for explicit completion signals
+        // Check for explicit completion signals.
+        // Keep only unambiguous phrases; broad ones like "work is done" / "all done"
+        // match normal analysis text and trigger false completed detection.
         const lowerTextNoTools = text.toLowerCase();
         const completionSignals = [
-          "status: done", "status=done", "task complete", "work is done",
-          "finished successfully", "completed successfully", "nothing more to do",
-          "all done", "issue is complete", "marked as done",
+          /\bstatus:\s*done\b/,
+          /\bstatus\s*=\s*done\b/,
+          /\bnothing more to do\b/,
+          /\bfinal summary\b/,
         ];
-        if (completionSignals.some((p) => lowerTextNoTools.includes(p))) {
+        if (completionSignals.some((p) => p.test(lowerTextNoTools))) {
           stoppedReason = "completed";
           break;
         }

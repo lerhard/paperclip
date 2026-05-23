@@ -672,7 +672,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const msg = choice.message;
       // Some proxies/models emit a placeholder when reasoning is not available; strip it.
       const cleanedContent = (msg.content ?? "").replace(/\[reasoning unavailable\]/gi, "").trim();
-      finalText = cleanedContent;
+      // Preserve verdict text: don't overwrite with empty string when model sends tool_calls (msg.content is null)
+      if (cleanedContent) {
+        finalText = cleanedContent;
+      }
 
       // Emit reasoning/thinking if present
       // OpenAI format: msg.reasoning (some proxies add this field)
@@ -817,9 +820,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       // No tool calls — check if we should treat this as completion or continue.
       if (!cleanedContent) {
-        emit(onLog, { kind: "stderr", ts: ts(), text: "[openai-proxy] WARNING: Empty response (no text, no tool calls). Treating as completion." });
-        stoppedReason = "completed";
-        break;
+        // Empty response is NOT completion — model is stuck or confused.
+        // Nudge it to continue instead of falsely marking done.
+        emit(onLog, { kind: "stderr", ts: ts(), text: "[openai-proxy] WARNING: Empty response (no text, no tool calls). Nudging model to continue..." });
+        messages.push({ role: "assistant", content: "" });
+        messages.push({
+          role: "user",
+          content: "SYSTEM: You returned an empty response. Please continue working on the issue using the available tools.",
+        });
+        consecutiveTextOnlyTurns++;
+        if (consecutiveTextOnlyTurns >= MAX_TEXT_ONLY_TURNS) {
+          emit(onLog, { kind: "stderr", ts: ts(), text: `[openai-proxy] Model responded ${MAX_TEXT_ONLY_TURNS}x with empty/text only. Treating as error.` });
+          runError = {
+            message: `Model responded ${MAX_TEXT_ONLY_TURNS} times with empty or non-tool responses without completing.`,
+            code: "empty_response_loop",
+          };
+          stoppedReason = "error";
+          break;
+        }
+        continue;
       }
 
       // Detect pseudo-code tool calls (model outputs HTML/XML tags instead of structured tool_calls)
@@ -852,14 +871,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         continue;
       }
 
-      // Check for explicit completion signals
+      // Check for explicit completion signals.
+      // Keep only unambiguous phrases; broad ones like "work is done" / "all done"
+      // match normal analysis text and trigger false completed detection.
       const lowerText = cleanedContent.toLowerCase();
       const completionSignals = [
-        "status: done", "status=done", "task complete", "work is done",
-        "finished successfully", "completed successfully", "nothing more to do",
-        "all done", "issue is complete", "marked as done",
+        /\bstatus:\s*done\b/,
+        /\bstatus\s*=\s*done\b/,
+        /\bnothing more to do\b/,
+        /\bfinal summary\b/,
       ];
-      if (completionSignals.some((p) => lowerText.includes(p))) {
+      if (completionSignals.some((p) => p.test(lowerText))) {
         messages.push({ role: "assistant", content: contextContent || "" });
         stoppedReason = "completed";
         break;
