@@ -990,8 +990,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         // Give it a few chances to self-correct by nudging it.
         consecutiveTextOnlyTurns++;
         if (consecutiveTextOnlyTurns >= MAX_TEXT_ONLY_TURNS) {
-          await writeRawStderr(onLog, `[openrouter] Model responded ${MAX_TEXT_ONLY_TURNS}x with text only (no tool calls, no completion signal). Treating as completed.`);
-          stoppedReason = "completed";
+          // Model is stuck in a text-only loop — NOT completion.
+          await writeRawStderr(onLog, `[openrouter] Model responded ${MAX_TEXT_ONLY_TURNS}x with text only (no tool calls, no completion signal). Treating as blocked.`);
+          runError = {
+            message: `Model responded ${MAX_TEXT_ONLY_TURNS} times with text only without using tools or signaling completion.`,
+            code: "text_only_loop",
+          };
+          stoppedReason = "error";
           break;
         }
 
